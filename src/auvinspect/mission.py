@@ -105,7 +105,8 @@ class _Mission:
         pos, q = self.vehicle.truth_pose()
         rpy = self.vehicle.truth_rpy()
         sa, sg = self.onboard.hull_std(float(self.hull.inverse(p_est)[1]))
-        self.ticks.append([self.vehicle.t, *pos, *rpy, *p_est, est['yaw'], *p_ref, *thrust, sa, sg, self.vehicle.clearance()])
+        self.ticks.append([self.vehicle.t, *pos, *rpy, *p_est, est['yaw'], *p_ref, *thrust, sa, sg, self.vehicle.tilt_deg,
+                           self.vehicle.clearance()])
 
     # ------------------------------------------------------------------ frames
     def capture(self, leg, leg_index: int, fj):
@@ -181,7 +182,7 @@ class _Mission:
     def summary(self, rounds, remaining, elapsed) -> dict:
         ref = self.referee.summary()
         true, claimed = self.referee.covered(), self.onboard.claimed.covered()
-        tk = np.asarray(self.ticks) if self.ticks else np.zeros((0, 23))
+        tk = np.asarray(self.ticks) if self.ticks else np.zeros((0, 24))
         herr = np.hypot(tk[:, 7] - tk[:, 1], tk[:, 8] - tk[:, 2]) if len(tk) else np.zeros(1)
         fe = np.asarray(self.frame_errors) if self.frame_errors else np.zeros((1, 3))
         ref.update({
@@ -224,7 +225,7 @@ class _Mission:
         Image.fromarray(claim_check(self.referee.covered(), self.onboard.claimed.covered())).save(
             os.path.join(self.out_dir, 'claim_check.png'))
         cols = ['t', 'x', 'y', 'z', 'roll', 'pitch', 'yaw', 'x_est', 'y_est', 'z_est', 'yaw_est', 'x_ref', 'y_ref', 'z_ref',
-                *[f'thrust_{n}' for n in self.ctrl.names], 'std_along', 'std_girth', 'clearance']
+                *[f'thrust_{n}' for n in self.ctrl.names], 'std_along', 'std_girth', 'tilt_deg', 'clearance']
         np.savez_compressed(os.path.join(self.out_dir, 'trajectory.npz'), columns=np.array(cols),
                             data=np.asarray(self.ticks, np.float64))
 

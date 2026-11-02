@@ -207,7 +207,7 @@ an index.
 | `mission/frames.jsonl` | Per frame: true camera pose, phase and leg, exposure, gain and blur, active faults, the onboard verdict (claimed, uncertain, black, below limits) with its estimated camera pose and uncertainty, camera position error along the ship, girth and normal |
 | `mission/coverage.json` | Referee coverage and items, claimed against true coverage, rounds and legs, navigation error, EKF summary, minimum clearance, contacts, fault log |
 | `mission/claimed.png`, `claim_check.png` | Claimed coverage; agreement map (green both, red claimed but not seen, blue seen but not claimed) |
-| `mission/trajectory.npz` | Per control tick: true pose, estimate, reference, thrust, position uncertainty, clearance |
+| `mission/trajectory.npz` | Per control tick: true pose, estimate, reference, thrust, position uncertainty, camera tilt, clearance |
 
 ## Tests
 
