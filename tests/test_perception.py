@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from auvinspect import baseline, config, dataset, perception, survey
+from auvinspect import baseline, config, dataset, perception
 
 
 def _obj(item, cls, box, required=True, size='medium'):
@@ -38,10 +38,8 @@ def test_referee_scores_hits_false_alarms_and_ignored_objects():
 
 
 @pytest.fixture(scope='module')
-def small_dataset(tmp_path_factory, small_scn):
-    root = tmp_path_factory.mktemp('perception')
-    small_scn.save(str(root / 'scn'))
-    survey.run(small_scn, str(root / 'scn' / 'survey'), save_frames=True)
+def small_dataset(small_survey, small_scn):
+    root = small_survey
     summary = dataset.export([str(root / 'scn' / 'survey')], str(root / 'ds'), small_scn.cfg)
     return root, summary, json.load(open(root / 'ds' / 'annotations.json'))
 

@@ -22,9 +22,18 @@ dependencies = [
 # index (a same-named index package would be someone else's code).
 [tool.uv.sources]
 auv-navigation-fusion = { path = "../auv_navigation_fusion/dist/auv_navigation_fusion-0.1.0-py3-none-any.whl" }
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+# CPU-only PyTorch builds (the PyPI builds bundle about 3 GB of GPU libraries this project does not use)
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4,<8"]
+learn = ["torch>=2.4,<3", "torchvision>=0.19,<1"]   # learned detectors (CPU builds, see the pytorch-cpu index)
 
 [project.scripts]
 auvinspect = "auvinspect.cli:main"

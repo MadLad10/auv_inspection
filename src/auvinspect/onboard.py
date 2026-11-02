@@ -203,7 +203,7 @@ class Onboard:
     def process_frame(self, rgb: np.ndarray, exposure_s: float, gain: float) -> dict:
         """Check a frame and add its footprint to the claimed (or unverified) coverage."""
         c, A = self.camera_pose(self.tilt)
-        rec = {'cam_pos_est': [round(float(v), 4) for v in c]}
+        rec = {'cam_pos_est': [round(float(v), 4) for v in c], 'cam_axes_est': [[round(float(v), 6) for v in row] for row in A]}
         if float(rgb.std()) < self.cfg['onboard']['dead_frame_std_dn']:
             return {**rec, 'claim': 'black', 'claimed_new': 0}
         r = float(self.hull.raycast(c, -A[:, 2]))

@@ -236,6 +236,15 @@ perception:                    # datasets from recorded frames and the scoring o
   score_threshold: 0.5         # detections at or above this score are reported as findings
   splits: [0.7, 0.15, 0.15]    # train / val / test shares, assigned per scenario seed
 
+mapping:                       # findings on the hull map, fused across frames, and their scoring
+  samples_per_box: 7           # rays per side of a detection box cast onto the hull
+  merge_overlap: 0.5           # a view joins a finding when it and one of its views overlap this share of the smaller ...
+  merge_gap_m: 0.02            # ... both boxes grown by this
+  match_tolerance_m: 0.05      # a finding matches an item when their hull boxes, grown by this, overlap
+  min_views: 1                 # findings seen in fewer frames are dropped
+  confirm_support: 0.5         # findings detected in at least this share of the frames that saw them are confirmed
+  mosaic_cell_m: 0.01          # pixel size of the report's hull photomosaic
+
 baseline:                      # classical detector: colour and brightness anomalies against the hull paint
   dark_level: 0.06             # pixels darker than this share of full scale are water, not hull
   flat_field_degree: 4         # illumination: 2-D polynomial in log brightness over the image ...

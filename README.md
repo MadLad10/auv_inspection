@@ -9,6 +9,7 @@ by its own claims.
 6-DOF vehicle dynamics with added mass and contact, Jaffe-McGlamery underwater image formation with
 a photon-counting camera, and a contrast-to-noise coverage criterion. Milestone 3 (perception) has
 its dataset exporter, perception referee and a classical baseline; learned models come next.
+Milestone 4 has the defect map, its referee and the inspection report; change detection comes next.
 
 ## What it does now
 
@@ -136,6 +137,31 @@ Mean AP 0.26, 1.7 false alarms per frame. Colour-distinct defects are found; thi
 (3-D fittings whose sides change their outline) and missing-anode footprints are not. This is the
 floor a learned detector has to beat.
 
+### Defect map and report (milestone 4, in progress)
+
+- **Placing** ([`mapping.py`](src/auvinspect/mapping.py)). Each detection's box is cast onto the
+  hull from the camera pose the vehicle estimated for that frame (navigation, AHRS, tilt encoder),
+  giving its box in hull coordinates and its area from the pixel count times the exact surface area
+  of a pixel.
+- **Fusing and confirming.** Views of one class join a finding when they overlap most of the smaller
+  box, so partial views of a large patch merge while neighbours stay apart. A finding's support is
+  the share of the frames that saw its spot (by the vehicle's own poses) in which it was detected;
+  findings with support of at least 0.5 are *confirmed*, the rest *possible*. None is dropped.
+- **Report** ([`report.py`](src/auvinspect/report.py)). A hull photomosaic built from the vehicle's
+  own frames at its own poses (lamp falloff divided out), with the findings boxed, the unverified
+  areas hatched, a findings table with location, extent, area, support and an evidence crop, the
+  vehicle's health log, and a review status per finding read from `review.json`. A separate
+  appendix, marked simulation only, scores the map against the truth.
+- **Map referee.** A finding matches an item of its class when their hull boxes overlap; further
+  findings on one item are duplicates. Required items are those the coverage referee counted
+  inspected and that some frame showed with enough pixels to find; inspected items that never did
+  (cracks about one pixel wide) are listed as below the camera's resolution.
+
+With the classical baseline on the seed-7 survey (simulation results): all findings cover 24 of the
+26 findable items; the 21 confirmed findings cover 17 of them at 86% precision. Matched findings sit
+within 1 to 4 cm of the true centres; areas come out at 1.07x the truth for corrosion and 0.88x for
+biofouling, but 2.1x for coating damage, whose flaked edge the baseline overestimates.
+
 ## Physics
 
 ### Water and light ([`optics.py`](src/auvinspect/optics.py))
@@ -232,6 +258,15 @@ scenario directory):
 .venv/bin/auvinspect evaluate --dataset runs/dataset --detections runs/dataset/baseline_test.json --split test
 ```
 
+Defect map and inspection report for a run (detections keyed by frame name; default: the baseline):
+
+```bash
+.venv/bin/auvinspect report --run runs/s7/mission --out runs/s7/report
+```
+
+An inspector reviews findings by writing `runs/s7/report/review.json`, for example
+`{"F012": {"status": "rejected", "note": "weld seam"}}`, and re-running the report.
+
 The sibling package `auv_navigation_fusion` is installed from its built wheel in
 `../auv_navigation_fusion/dist` (see `[tool.uv.sources]` in `pyproject.toml`), never by name from
 an index.
@@ -269,6 +304,9 @@ an index.
 | `mission/trajectory.npz` | Per control tick: true pose, estimate, reference, thrust, position uncertainty, camera tilt, clearance |
 | `dataset/images`, `masks`, `labels` | Per split: images, class masks (0 background, k = class k), YOLO box labels |
 | `dataset/annotations.json` | Classes, splits, and per frame every visible object: item, class, box, pixels, inspectable share, size, required |
+| `report/report.html` | Inspection report: coverage, hull map, findings table with evidence, health log, simulation-only appendix |
+| `report/findings.json`, `metrics.json` | Findings (hull box, centre, area, views, support, tier, evidence, review, match) and the map referee |
+| `report/mosaic.png`, `map.png`, `map_vs_truth.png`, `evidence/` | Photomosaic, findings map, findings against true items, evidence crops |
 
 ## Tests
 
@@ -291,6 +329,8 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
   motion blur, blackout frames, determinism;
 - planning and the referee: full coverage of a planned survey, a plan with a missing lane caught,
   an impossible standoff refused, configuration validation, scenario determinism and exact areas;
+- mapping and report: perfect detections mapping every findable item in place with the right area;
+  partial views fusing while neighbours stay apart; the report's files and review statuses;
 - perception: the referee's hits, false alarms, ignored objects, items across hulls and average
   precision on known cases; dataset objects against the per-pixel ground truth; the baseline
   rejecting weld seams and finding corrosion on the test hull;
@@ -310,7 +350,8 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
    scored against the ground truth per class and per size. *Done so far: datasets, the perception
    referee, a classical baseline.*
 4. Defect map and report: defects placed on the hull with sizes and evidence frames; a second
-   survey with grown defects for change detection; inspector review.
+   survey with grown defects for change detection; inspector review. *Done so far: the map with
+   multi-view confirmation, the photomosaic report with review statuses, the map referee.*
 5. Production layer: simulation tests in CI that gate merges on coverage and detection metrics,
    containers, model registry, observability, fault injection.
 6. Fleet: several vehicles sharing a structure under acoustic communication limits.
@@ -331,3 +372,6 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
   `vehicle.control.drag_feedforward`). The onboard assumes the phase function and daylight it is
   configured with; it measures attenuation and scattering.
 - Revisits are planned for the nominal water; persistent turbidity leaves holes, which are reported.
+- The coverage criterion asks whether a faint stain over a 2 cm cell would be seen; it does not ask
+  whether a feature narrower than a pixel is resolved. Cracks 3 to 6 mm wide at 4 mm per pixel can
+  count as covered yet show too few pixels to find; the map referee lists them separately.

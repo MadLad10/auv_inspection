@@ -100,7 +100,8 @@ def detect(rgb: np.ndarray, cfg: dict) -> list[dict]:
         else:
             cls = 'coating_damage'
         score = float(1 - np.exp(-z[sl][comp].mean() / b['threshold_mad']))
-        out.append({'class': cls, 'score': round(score, 4), 'box': [int(sl[1].start), int(sl[0].start), int(sl[1].stop), int(sl[0].stop)]})
+        out.append({'class': cls, 'score': round(score, 4), 'box': [int(sl[1].start), int(sl[0].start), int(sl[1].stop), int(sl[0].stop)],
+                    'area_px': area})
     return _fold_contained(out, b['containment'])
 
 

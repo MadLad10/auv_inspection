@@ -67,6 +67,22 @@ def _evaluate(a):
     print(json.dumps(m, indent=1))
 
 
+def _report(a):
+    from .report import write
+    cfg = config_mod.load(a.config)
+    if a.detections:
+        with open(a.detections) as f:
+            det = json.load(f)
+    else:
+        import numpy as np
+        from PIL import Image
+        from .baseline import detect
+        recs = [json.loads(l) for l in open(os.path.join(a.run, 'frames.jsonl'))]
+        det = {r['frame']: detect(np.asarray(Image.open(os.path.join(a.run, 'frames', r['frame'] + '.png')).convert('RGB')), cfg)
+               for r in recs if r['camera'] == cfg['survey']['camera'] and r.get('signal', True)}
+    print(json.dumps(write(a.run, det, a.out, cfg), indent=1))
+
+
 def _preview(a):
     from .preview import rig_sheet, texture_sheet
     scn = Scenario.load(a.scenario, config_mod.load(a.config))
@@ -118,6 +134,12 @@ def main(argv=None):
     e.add_argument('--out', help='metrics JSON')
     e.add_argument('--config', help='YAML run settings merged over the defaults')
     e.set_defaults(fn=_evaluate)
+    r = sub.add_parser('report', help='hull defect map and inspection report for a recorded run')
+    r.add_argument('--run', required=True, help='a survey or mission directory inside its scenario directory')
+    r.add_argument('--out', required=True)
+    r.add_argument('--detections', help='detections JSON keyed by frame name (default: the classical baseline)')
+    r.add_argument('--config', help='YAML run settings merged over the defaults')
+    r.set_defaults(fn=_report)
     v = sub.add_parser('preview', help='render the rig at one pose, or the annotated texture')
     v.add_argument('--scenario', required=True)
     v.add_argument('--out', required=True)

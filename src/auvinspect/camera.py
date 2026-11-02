@@ -54,6 +54,19 @@ def pixel_rays(cams: dict) -> np.ndarray:
     return np.stack([uu, vv, -np.ones_like(uu)], -1)
 
 
+def _pixel_jacobian(rays_cam: np.ndarray, normals_cam: np.ndarray):
+    """Gram matrix entries (a, b, c) of the image-to-surface Jacobian per unit depth / focal length."""
+    q = np.asarray(rays_cam, float)
+    n = np.asarray(normals_cam, float)
+    nq = (n * q).sum(-1)
+    nq = np.where(np.abs(nq) < 1e-9, -1e-9, nq)
+    j1 = -q * (n[..., 0] / nq)[..., None]
+    j1[..., 0] += 1.0
+    j2 = -q * (n[..., 1] / nq)[..., None]
+    j2[..., 1] += 1.0
+    return (j1 * j1).sum(-1), (j1 * j2).sum(-1), (j2 * j2).sum(-1)
+
+
 def footprint_mm(depth: np.ndarray, rays_cam: np.ndarray, normals_cam: np.ndarray, focal: float) -> np.ndarray:
     """Worst-direction size on the surface of one pixel (mm), exact for a locally flat surface.
 
@@ -63,14 +76,12 @@ def footprint_mm(depth: np.ndarray, rays_cam: np.ndarray, normals_cam: np.ndarra
     footprint is the larger singular value of those two vectors. A surface parallel to the image plane
     gives Z / f in every pixel; tilting it by i stretches the centre pixel to Z / (f cos i).
     """
-    q = np.asarray(rays_cam, float)
-    n = np.asarray(normals_cam, float)
-    nq = (n * q).sum(-1)
-    nq = np.where(np.abs(nq) < 1e-9, -1e-9, nq)
-    j1 = -q * (n[..., 0] / nq)[..., None]
-    j1[..., 0] += 1.0
-    j2 = -q * (n[..., 1] / nq)[..., None]
-    j2[..., 1] += 1.0
-    a, b, c = (j1 * j1).sum(-1), (j1 * j2).sum(-1), (j2 * j2).sum(-1)
+    a, b, c = _pixel_jacobian(rays_cam, normals_cam)
     smax = np.sqrt((a + c) / 2 + np.sqrt(((a - c) / 2) ** 2 + b * b))
     return np.asarray(depth, float) / focal * smax * 1000.0
+
+
+def pixel_area_mm2(depth: np.ndarray, rays_cam: np.ndarray, normals_cam: np.ndarray, focal: float) -> np.ndarray:
+    """Surface area one pixel covers (mm^2): (Z / f)^2 times the product of the Jacobian's singular values."""
+    a, b, c = _pixel_jacobian(rays_cam, normals_cam)
+    return (np.asarray(depth, float) / focal * 1000.0) ** 2 * np.sqrt(np.maximum(a * c - b * b, 0.0))

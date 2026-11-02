@@ -170,6 +170,10 @@ def _validate_mission(cfg: dict) -> None:
     _check(len(p['splits']) == 3 and min(p['splits']) >= 0 and abs(sum(p['splits']) - 1) < 1e-9, 'perception.splits must be three shares summing to 1')
     _check(list(p['size_bins_m2']) == sorted(p['size_bins_m2']), 'perception.size_bins_m2 must be increasing')
     _check(cfg['baseline']['threshold_mad'] > 0 and cfg['baseline']['fit_step_px'] >= 1, 'baseline.threshold_mad / fit_step_px out of range')
+    m = cfg['mapping']
+    _check(m['samples_per_box'] >= 2 and 0 < m['merge_overlap'] <= 1 and m['merge_gap_m'] >= 0 and m['match_tolerance_m'] >= 0 and m['min_views'] >= 1
+           and 0 <= m['confirm_support'] <= 1 and m['mosaic_cell_m'] > 0,
+           'mapping: samples_per_box >= 2, gaps and tolerances non-negative, min_views >= 1')
     _check(isinstance(cfg['faults'], list), 'faults must be a list')
     for f in cfg['faults']:
         _check(isinstance(f, dict) and f.get('type') in FAULT_TYPES, f'faults: unknown fault {f!r}; known: {sorted(FAULT_TYPES)}')
