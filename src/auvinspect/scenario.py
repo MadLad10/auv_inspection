@@ -35,6 +35,7 @@ class Scenario:
     labels: np.ndarray             # (rows, cols) int32 item id, -1 = sound paint
     items: list[dict] = field(default_factory=list)
     features: list[dict] = field(default_factory=list)   # benign distractors (sea chests)
+    lineage: dict | None = None    # for an evolved hull: the base scenario's digest, months and growth rates
 
     @property
     def mm_per_px(self) -> float:
@@ -58,6 +59,7 @@ class Scenario:
             'features': self.features,
             'config_sha256': config_mod.digest(config_mod.world(self.cfg)),
             'config': config_mod.world(self.cfg),
+            **({'lineage': self.lineage} if self.lineage else {}),
         }
 
     def digest(self) -> str:
@@ -82,7 +84,7 @@ class Scenario:
         labels = np.load(os.path.join(path, 'labels.npz'))['labels']
         cfg = config_mod.merge_world(run_cfg or config_mod.load(), spec['config'])
         scn = cls(spec['seed'], cfg, HullGeometry(**spec['hull']), texture, labels,
-                  spec['items'], spec['features'])
+                  spec['items'], spec['features'], spec.get('lineage'))
         if 'digest' in spec and scn.digest() != spec['digest']:
             raise ValueError(f'scenario at {path} does not match its recorded digest')
         return scn

@@ -55,6 +55,17 @@ def test_views_of_one_patch_fuse_and_neighbours_stay_apart(small_cfg):
     assert sorted(f['views'] for f in out) == [1, 3]
 
 
+def test_finding_area_from_whole_views_or_the_union_of_cut_ones(small_cfg):
+    def view(box, area, clipped):
+        return {'class': 'biofouling', 'score': 0.9, 'frame': 'f', 'box_px': [0, 0, 1, 1], 'hull_box': box,
+                'centre': [(box[0] + box[2]) / 2, (box[1] + box[3]) / 2], 'area_m2': area, 'clipped': clipped}
+    halves = [view([0.0, 0.0, 0.6, 0.6], 0.18, True), view([0.3, 0.0, 1.0, 0.6], 0.21, True)]   # a 1.0 x 0.6 m patch, half filled
+    [f] = mapping.fuse(halves, small_cfg)
+    assert f['area_m2'] == pytest.approx(0.30, rel=0.03)               # union 0.6 m2 times fill 0.5, not one half
+    [f] = mapping.fuse(halves + [view([0.0, 0.0, 1.0, 0.6], 0.31, False)], small_cfg)
+    assert f['area_m2'] == pytest.approx(0.31)                         # a view that saw it whole decides
+
+
 def test_report_has_findings_maps_evidence_and_reviews(tmp_path, small_survey, small_scn, perfect_map):
     det, findings, _ = perfect_map
     out = tmp_path / 'report'

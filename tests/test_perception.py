@@ -90,3 +90,17 @@ def test_baseline_reports_a_patch_but_not_a_weld_seam():
     det = baseline.detect((img * 255).astype(np.uint8), cfg)
     assert [d['class'] for d in det] == ['coating_damage']
     assert perception.iou(det[0]['box'], [180, 100, 240, 150]) > 0.6
+
+
+def test_paint_reference_finds_fouling_that_fills_most_of_the_frame():
+    cfg = config.load()
+    clean = [(_paint() * 255).astype(np.uint8)]
+    img = _paint()
+    img[:, :210] *= np.array([0.6, 1.9, 1.3])                    # green slime over two thirds of the frame
+    rgb = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+    ref = baseline.paint_reference(clean, cfg)
+    det = baseline.detect(rgb, cfg, reference=ref)
+    found = [d for d in det if d['class'] == 'biofouling']
+    assert found and perception.iou(max(found, key=lambda d: d['area_px'])['box'], [0, 0, 210, 240]) > 0.6
+    plain = baseline.detect(rgb, cfg)                            # without it the fouling passes for paint
+    assert not [d for d in plain if d['class'] == 'biofouling' and perception.iou(d['box'], [0, 0, 210, 240]) > 0.6]

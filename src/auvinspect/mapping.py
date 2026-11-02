@@ -12,8 +12,10 @@ Fusing: a view joins a finding of its class when its hull box and one of the fin
 by at least mapping.merge_overlap of the smaller box (both grown by mapping.merge_gap_m); findings are
 built greedily from the highest score. Overlap relative to the smaller box joins partial views of a
 large patch, and comparing views rather than the finding's growing union keeps neighbours apart. A finding keeps its views as evidence
-(frame, box, score); its hull box is their union, its centre and area are their medians, its score
-the highest. Its support is the share of the frames that saw its centre (by the vehicle's own poses:
+(frame, box, score); its hull box is their union and its centre their median. Its area is the median
+area of the views that saw it whole (box clear of the image border); when every view is cut by the
+border (a patch larger than a frame, seen in parts), it is the area the union of the views' hull
+boxes covers times their median fill (area over box area). Its score is the highest. Its support is the share of the frames that saw its centre (by the vehicle's own poses:
 in the image, unobstructed, within range) that detected it; a real defect is seen again and again,
 noise is not. Findings at or above mapping.confirm_support are `confirmed`, the rest `possible`;
 none is dropped, since a missed defect costs more than a finding an inspector rejects.
@@ -76,7 +78,8 @@ def place(det: dict, rec: dict, hull: HullGeometry, cfg: dict) -> dict | None:
     else:
         area = (box[2] - box[0]) * (box[3] - box[1])
     return {'class': det['class'], 'score': float(det['score']), 'frame': rec['frame'], 'box_px': list(det['box']),
-            'hull_box': box, 'centre': [float(np.median(x)), float(np.median(s))], 'area_m2': float(area)}
+            'hull_box': box, 'centre': [float(np.median(x)), float(np.median(s))], 'area_m2': float(area),
+            'clipped': bool(min(x0, y0, W - x1, H - y1) <= cfg['mapping']['border_px'])}
 
 
 def _boxes_touch(a, b, gap: float) -> bool:
@@ -111,13 +114,31 @@ def fuse(views: list[dict], cfg: dict) -> list[dict]:
         vs = f['views']
         if len(vs) < cfg['mapping']['min_views']:
             continue
+        whole = [v['area_m2'] for v in vs if not v.get('clipped')]
+        if whole:
+            area = float(np.median(whole))
+        else:
+            fill = float(np.median([v['area_m2'] / max((v['hull_box'][2] - v['hull_box'][0]) * (v['hull_box'][3] - v['hull_box'][1]), 1e-9)
+                                    for v in vs]))
+            area = _union_area([v['hull_box'] for v in vs], cfg['mapping']['mosaic_cell_m']) * min(fill, 1.0)
         out.append({'id': f'F{k + 1:03d}', 'class': f['class'], 'score': round(max(v['score'] for v in vs), 4),
                     'views': len(vs), 'hull_box': [round(c, 4) for c in f['hull_box']],
                     'centre': [round(float(np.median([v['centre'][i] for v in vs])), 4) for i in range(2)],
-                    'area_m2': round(float(np.median([v['area_m2'] for v in vs])), 5),
+                    'area_m2': round(area, 5),
                     'evidence': [{'frame': v['frame'], 'box': v['box_px'], 'score': round(v['score'], 4)}
                                  for v in sorted(vs, key=lambda v: -v['score'])]})
     return out
+
+
+def _union_area(boxes: list[list[float]], cell: float) -> float:
+    """Area covered by the union of axis-aligned boxes, on a grid of the given cell size."""
+    b = np.asarray(boxes)
+    x0, s0 = b[:, 0].min(), b[:, 1].min()
+    nx, ns = int(np.ceil((b[:, 2].max() - x0) / cell)) + 1, int(np.ceil((b[:, 3].max() - s0) / cell)) + 1
+    grid = np.zeros((ns, nx), bool)
+    for bx in b:
+        grid[int((bx[1] - s0) / cell):int(np.ceil((bx[3] - s0) / cell)), int((bx[0] - x0) / cell):int(np.ceil((bx[2] - x0) / cell))] = True
+    return float(grid.sum()) * cell * cell
 
 
 def item_box(it: dict) -> list[float]:

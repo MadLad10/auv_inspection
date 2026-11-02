@@ -170,6 +170,8 @@ def write(run_dir: str, detections: dict, out_dir: str, cfg: dict) -> dict:
         json.dump(findings, f, indent=1)
     with open(os.path.join(out_dir, 'metrics.json'), 'w') as f:
         json.dump(metrics, f, indent=1)
+    with open(os.path.join(out_dir, 'manifest.json'), 'w') as f:
+        json.dump({'run': os.path.abspath(run_dir), 'scenario': os.path.abspath(scn_dir), 'scenario_digest': spec.get('digest')}, f, indent=1)
     _html(out_dir, spec, cov, findings, metrics, claimed_share)
     return {'findings': len(findings), 'confirmed': sum(f['tier'] == 'confirmed' for f in findings),
             'claimed_coverage': round(claimed_share, 4), 'map_referee': {k: {x: v[x] for x in ('items_required', 'items_found', 'recall', 'findings', 'precision')}

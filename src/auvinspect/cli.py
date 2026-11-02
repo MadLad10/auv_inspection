@@ -74,13 +74,36 @@ def _report(a):
         with open(a.detections) as f:
             det = json.load(f)
     else:
-        import numpy as np
-        from PIL import Image
-        from .baseline import detect
-        recs = [json.loads(l) for l in open(os.path.join(a.run, 'frames.jsonl'))]
-        det = {r['frame']: detect(np.asarray(Image.open(os.path.join(a.run, 'frames', r['frame'] + '.png')).convert('RGB')), cfg)
-               for r in recs if r['camera'] == cfg['survey']['camera'] and r.get('signal', True)}
+        from .baseline import run_frames
+        det = run_frames(a.run, cfg)
     print(json.dumps(write(a.run, det, a.out, cfg), indent=1))
+
+
+def _evolve(a):
+    from .evolution import changes, evolve
+    cfg = config_mod.load(a.config)
+    base = Scenario.load(a.scenario, cfg)
+    later = evolve(base, a.months, cfg)
+    digest = later.save(a.out)
+    counts: dict[str, int] = {}
+    for v in changes(base, later, cfg['change']['growth_ratio']).values():
+        counts[v] = counts.get(v, 0) + 1
+    print(json.dumps({'out': a.out, 'digest': digest, 'months': a.months, 'true_changes': counts}, indent=1))
+
+
+def _change(a):
+    from .change import run
+    changes, metrics = run(a.before, a.after, config_mod.load(a.config))
+    os.makedirs(a.out, exist_ok=True)
+    with open(os.path.join(a.out, 'changes.json'), 'w') as f:
+        json.dump(changes, f, indent=1)
+    with open(os.path.join(a.out, 'metrics.json'), 'w') as f:
+        json.dump(metrics, f, indent=1)
+    counts: dict[str, int] = {}
+    for c in changes:
+        counts[c['change']] = counts.get(c['change'], 0) + 1
+    short = {t: {k: v for k, v in m.items() if k != 'confusion'} for t, m in metrics.items()}
+    print(json.dumps({'changes': counts, 'referee': short, 'out': a.out}, indent=1))
 
 
 def _preview(a):
@@ -140,6 +163,18 @@ def main(argv=None):
     r.add_argument('--detections', help='detections JSON keyed by frame name (default: the classical baseline)')
     r.add_argument('--config', help='YAML run settings merged over the defaults')
     r.set_defaults(fn=_report)
+    ev = sub.add_parser('evolve', help='the same hull some months later: grown, new and aged defects')
+    ev.add_argument('--scenario', required=True)
+    ev.add_argument('--months', type=float, required=True)
+    ev.add_argument('--out', required=True)
+    ev.add_argument('--config', help='YAML settings merged over the defaults (evolution rates)')
+    ev.set_defaults(fn=_evolve)
+    ch = sub.add_parser('change', help='compare the reports of two surveys of one hull')
+    ch.add_argument('--before', required=True, help='report directory of the earlier survey')
+    ch.add_argument('--after', required=True, help='report directory of the later survey')
+    ch.add_argument('--out', required=True)
+    ch.add_argument('--config', help='YAML run settings merged over the defaults')
+    ch.set_defaults(fn=_change)
     v = sub.add_parser('preview', help='render the rig at one pose, or the annotated texture')
     v.add_argument('--scenario', required=True)
     v.add_argument('--out', required=True)

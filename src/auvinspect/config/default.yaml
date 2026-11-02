@@ -227,6 +227,18 @@ onboard:
 mission:
   max_seconds: 3600.0          # simulated time limit
 
+evolution:                     # how a hull changes between surveys (`auvinspect evolve`)
+  corrosion:      {growth_per_month: 0.04, new_per_m2_month: 0.002}
+  coating_damage: {growth_per_month: 0.03, new_per_m2_month: 0.001}
+  biofouling:     {growth_per_month: 0.08, new_per_m2_month: 0.002}
+  crack:          {growth_mm_per_month: 4.0, new_per_m2_month: 0.0005}
+  anode:          {deplete_per_month: 0.03, detach_per_month: 0.01}
+  edge_noise: 0.5              # how unevenly a growing outline advances (0: a uniform band)
+
+change:                        # comparing the findings of two surveys of one hull
+  growth_ratio: 1.25           # a defect whose area grew by at least this factor is reported grown
+  match_overlap: 0.3           # findings of two surveys are one defect when they overlap this share of the smaller box
+
 perception:                    # datasets from recorded frames and the scoring of detectors
   classes: [corrosion, coating_damage, biofouling, crack, missing_anode, anode]
   min_visible_px: 50           # an item with fewer pixels in a frame is not expected to be found there
@@ -243,7 +255,8 @@ mapping:                       # findings on the hull map, fused across frames, 
   match_tolerance_m: 0.05      # a finding matches an item when their hull boxes, grown by this, overlap
   min_views: 1                 # findings seen in fewer frames are dropped
   confirm_support: 0.5         # findings detected in at least this share of the frames that saw them are confirmed
-  mosaic_cell_m: 0.01          # pixel size of the report's hull photomosaic
+  mosaic_cell_m: 0.01          # pixel size of the report's hull photomosaic; also the grid for a finding's area
+  border_px: 8                 # a detection box this close to the image border is cut by it (the patch goes on)
 
 baseline:                      # classical detector: colour and brightness anomalies against the hull paint
   dark_level: 0.06             # pixels darker than this share of full scale are water, not hull
@@ -253,6 +266,9 @@ baseline:                      # classical detector: colour and brightness anoma
   fit_step_px: 4               # fit on every n-th pixel
   smooth_px: 1.5               # Gaussian smoothing of the colour deviations before the anomaly test
   threshold_mad: 3.0           # anomaly: colour distance from the paint above this many median deviations
+  barnacle_ring_px: 3          # a bright blob whose surrounding ring this wide is mostly fouling is a barnacle
+  reference_band_mad: 3.0      # pixels within this many deviations of the run's paint colour seed the flat field
+  reference_stride: 4          # the paint reference is taken from every n-th frame of a run
   open_px: 1                   # morphological opening (removes speckle)
   close_px: 3                  # morphological closing (joins fragments)
   min_area_px: 60

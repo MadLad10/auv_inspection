@@ -169,10 +169,18 @@ def _validate_mission(cfg: dict) -> None:
            'perception.iou_match, min_inspectable_share and score_threshold must be shares')
     _check(len(p['splits']) == 3 and min(p['splits']) >= 0 and abs(sum(p['splits']) - 1) < 1e-9, 'perception.splits must be three shares summing to 1')
     _check(list(p['size_bins_m2']) == sorted(p['size_bins_m2']), 'perception.size_bins_m2 must be increasing')
-    _check(cfg['baseline']['threshold_mad'] > 0 and cfg['baseline']['fit_step_px'] >= 1, 'baseline.threshold_mad / fit_step_px out of range')
+    _check(cfg['baseline']['threshold_mad'] > 0 and cfg['baseline']['fit_step_px'] >= 1 and cfg['baseline']['barnacle_ring_px'] >= 1
+           and cfg['baseline']['reference_band_mad'] > 0 and cfg['baseline']['reference_stride'] >= 1,
+           'baseline.threshold_mad / fit_step_px / barnacle_ring_px out of range')
+    e = cfg['evolution']
+    for k in ('corrosion', 'coating_damage', 'biofouling', 'crack'):
+        _check(min(e[k].values()) >= 0, f'evolution.{k} rates must be non-negative')
+    _check(0 <= e['anode']['deplete_per_month'] <= 1 and 0 <= e['anode']['detach_per_month'] <= 1 and 0 <= e['edge_noise'] < 1,
+           'evolution: anode probabilities and edge_noise must be in [0, 1)')
+    _check(cfg['change']['growth_ratio'] > 1 and 0 < cfg['change']['match_overlap'] <= 1, 'change: growth_ratio > 1, match_overlap in (0, 1]')
     m = cfg['mapping']
     _check(m['samples_per_box'] >= 2 and 0 < m['merge_overlap'] <= 1 and m['merge_gap_m'] >= 0 and m['match_tolerance_m'] >= 0 and m['min_views'] >= 1
-           and 0 <= m['confirm_support'] <= 1 and m['mosaic_cell_m'] > 0,
+           and 0 <= m['confirm_support'] <= 1 and m['mosaic_cell_m'] > 0 and m['border_px'] >= 0,
            'mapping: samples_per_box >= 2, gaps and tolerances non-negative, min_views >= 1')
     _check(isinstance(cfg['faults'], list), 'faults must be a list')
     for f in cfg['faults']:
