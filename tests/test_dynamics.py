@@ -138,3 +138,11 @@ def test_a_dead_thruster_produces_nothing():
         v.step(np.array([20.0, 20.0, 0, 0, 0, 0]))
     assert v.body.thrust[0] == 0.0 and v.body.thrust[1] > 15.0
     assert v.body.nu[5] > 0.01        # the right thruster alone turns the vehicle to port
+
+
+def test_an_empty_battery_drives_nothing():
+    cfg = config.load(overrides={'hull': {'length_m': 6.0}, 'faults': [{'type': 'battery_drop', 't_start': 0.5, 'params': {'drop_pct': 100.0}}]})
+    v = Vehicle(HullGeometry.from_config(cfg), cfg, (3.0, -4.0, -3.0), seed=0)
+    for _ in range(40):
+        v.step(np.array([20.0, 20.0, 0, 0, 0, 0]))
+    assert v.battery_percent() == 0.0 and np.allclose(v.body.thrust, 0.0, atol=1e-3)

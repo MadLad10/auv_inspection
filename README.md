@@ -5,9 +5,10 @@ exact ground truth: every defect's position, outline and area is known, and ever
 knows which defect it shows. The pipeline can therefore be scored by an independent referee, not
 by its own claims.
 
-**Status:** milestone 2 of 6 (vehicle in the loop), on a physically based environment: Fossen
+**Status:** milestone 2 of 6 done (vehicle in the loop), on a physically based environment: Fossen
 6-DOF vehicle dynamics with added mass and contact, Jaffe-McGlamery underwater image formation with
-a photon-counting camera, and a contrast-to-noise coverage criterion.
+a photon-counting camera, and a contrast-to-noise coverage criterion. Milestone 3 (perception) has
+its dataset exporter, perception referee and a classical baseline; learned models come next.
 
 ## What it does now
 
@@ -55,12 +56,21 @@ covers 100% of the inspection band and inspects every item.
   the vehicle, by its own estimate, reaches each planned frame position.
 - **Faults** ([`faults.py`](src/auvinspect/faults.py)): camera blackout, turbidity, DVL dropout,
   IMU bias, compass disturbance, stuck depth sensor, dead thruster, standoff-sounder dropout and
-  battery loss, scheduled with onset and clear times and logged as ground truth.
+  battery loss, scheduled with onset and clear times and logged as ground truth. An empty battery
+  drives no thruster.
+- **Onboard health and safety.** The navigation filter's innovation gates reject a disturbed compass
+  and readings inconsistent with the other sensors. A frozen-value check excludes the depth sensor
+  while its readings repeat exactly (a live sensor always shows noise; a gate cannot see a sensor
+  stuck at a plausible value). Below a battery reserve the vehicle abandons the mission and climbs
+  along the hull at the standoff to the waterline, a path that keeps clear of the hull even from
+  under the bilge.
 - **Claimed coverage against the referee.** The vehicle judges each frame with the same image
   physics, from its estimated pose, the water its water-quality sensor measures, and the exposure
   and gain the camera used. A noiseless frame means a dead camera. Frames taken while the position
-  uncertainty along the ship or the girth is above a limit count as seen but unverified. The referee
-  compares this claim with what the camera truly saw: a cell claimed but not seen is a false claim.
+  uncertainty along the ship or the girth is above a limit count as seen but unverified; below it,
+  each footprint shrinks by twice those uncertainties before it is claimed (on the hull extended
+  past its ends and band, so only real edges shrink). The referee compares this claim with what the
+  camera truly saw: a cell claimed but not seen is a false claim.
 - **Replanning.** After the survey, unclaimed cells are clustered into holes. Each hole gets revisit
   lanes placed with the planner's own strip rules, for up to two rounds. Revisits are skipped while
   the vehicle's own position uncertainty is too large to claim anything.
@@ -75,16 +85,56 @@ the last lane; DVL dropout from 60 to 120 s; simulation results):
 | Run | After survey: true / claimed | After revisits: true / claimed | False claims | Largest along-ship error | Items inspected |
 |---|---|---|---|---|---|
 | Nominal | 100% / 100% | (none needed) | 0 | 0.05 m | 19 / 19 |
-| Camera blackout, 20 s | 93.0% / 92.9% | 100% / 100% | 0 | 0.05 m | 19 / 19 |
-| Turbidity (2 m visibility), 20 s | 93.0% / 92.9% | 100% / 100% | 0 | 0.05 m | 19 / 19 |
-| DVL dropout, 60 s | 100% / 84.5% | 100% / 100% | 0 | 0.68 m | 19 / 19 |
-| DVL dropout, 60 s, no hull-end fixes | 100% / 73.7% | revisits skipped (26% unverified) | 0 | 1.37 m | 19 / 19 |
+| Camera blackout, 20 s | 93.0% / 92.3% | 100% / 100% | 0 | 0.05 m | 19 / 19 |
+| Turbidity (2 m visibility), 20 s | 93.0% / 92.3% | 100% / 100% | 0 | 0.05 m | 19 / 19 |
+| DVL dropout, 60 s | 100% / 81.3% | 100% / 100% | 0 | 0.68 m | 19 / 19 |
+| DVL dropout, 60 s, no hull-end fixes | 100% / 72.9% | revisits skipped (27% unverified) | 0 | 1.37 m | 19 / 19 |
+| Stuck depth, compass offset 20°, gyro bias, sounder dropout, dead thruster | 100% / 100% | (none needed) | 0 | 0.05 m | 19 / 19 |
+| 95% battery loss at 80 s | 82.0% / 81.0% | aborted, surfaced along the hull | 0 | 0.05 m | 13 / 19 |
 
 In 2 m visibility the frames are milky haze: backscatter and forward scatter swamp the hull's
 contrast, so no pixel reaches the contrast-to-noise limit. The vehicle measures the water and
 agrees with the referee. During the DVL dropout the along-ship error grows by dead reckoning
-(attitude noise leaks gravity into the accelerometer integration) until the next hull end;
-without hull-end fixes the vehicle cannot verify what it saw and reports it as unverified.
+(attitude noise leaks gravity into the accelerometer integration) until the next hull end, where
+the edge search restores the fix; without hull-end fixes the vehicle cannot verify what it saw and
+reports it as unverified. In the mixed-fault run the frozen-value check excludes the stuck depth
+sensor 0.3 s after it freezes, keeping the girth error under 2 cm (22 cm without the check, while
+the vehicle drifted on its buoyancy), and the filter rejects all compass readings while the
+compass is disturbed.
+
+### Perception (milestone 3, in progress)
+
+- **Datasets** ([`dataset.py`](src/auvinspect/dataset.py)). Recorded frames become a labelled
+  dataset: images, per-pixel class masks, YOLO box labels and an annotations file listing every
+  visible object with its item id, box, pixel count, the share of its pixels the referee counts as
+  inspectable, physical size and size bin. An object is *required* in a frame when it is big enough
+  and inspectable enough to be found there; otherwise it is ignored. Frames go to train, val and test
+  by scenario, so overlapping frames of one hull never straddle splits.
+- **Perception referee** ([`perception.py`](src/auvinspect/perception.py)). Detections are matched to
+  objects per frame and class by box overlap. It reports average precision, precision and recall at
+  the reporting threshold, recall by size, false alarms per frame, and hull-level item recall: the
+  share of the hull's defects found in at least one frame.
+- **Classical baseline** ([`baseline.py`](src/auvinspect/baseline.py)). No learning, no downloads: a
+  robust polynomial fit of log brightness removes the lamp pattern, and pixels whose colour departs
+  from the paint by more than three median deviations become candidate regions. Weld seams, gratings
+  and the water edge are rejected by shape, and classes come from the colour change against the
+  paint and the shape.
+
+On 14 seeded hulls (1,344 frames; the 5 test hulls unseen while tuning; simulation results), the
+baseline on the test split:
+
+| Class | AP | Precision / recall at 0.5 | Hull items found |
+|---|---|---|---|
+| Corrosion | 0.79 | 0.86 / 0.81 | 25 / 26 |
+| Coating damage | 0.32 | 0.10 / 0.75 | 13 / 13 |
+| Biofouling | 0.46 | 0.51 / 0.72 | 15 / 15 |
+| Crack | 0.02 | 0.01 / 0.19 | 3 / 6 |
+| Missing anode | 0.00 | — / 0.00 | 0 / 2 |
+| Anode | 0.01 | 0.13 / 0.07 | 6 / 33 |
+
+Mean AP 0.26, 1.7 false alarms per frame. Colour-distinct defects are found; thin cracks, anodes
+(3-D fittings whose sides change their outline) and missing-anode footprints are not. This is the
+floor a learned detector has to beat.
 
 ## Physics
 
@@ -173,6 +223,15 @@ faults:
 
 `mission --seed` changes the sensor noise and initial fix without changing the world.
 
+Perception dataset, baseline detections and their score (runs are directories inside their
+scenario directory):
+
+```bash
+.venv/bin/auvinspect dataset  --run runs/s7/survey --run runs/s8/survey --out runs/dataset
+.venv/bin/auvinspect detect   --dataset runs/dataset --split test --out runs/dataset/baseline_test.json
+.venv/bin/auvinspect evaluate --dataset runs/dataset --detections runs/dataset/baseline_test.json --split test
+```
+
 The sibling package `auv_navigation_fusion` is installed from its built wheel in
 `../auv_navigation_fusion/dist` (see `[tool.uv.sources]` in `pyproject.toml`), never by name from
 an index.
@@ -201,13 +260,15 @@ an index.
 | `scenario.json` | Seed, hull, every item (class, area, bounding box, centroid, anode status), world config, digest |
 | `texture.png`, `labels.npz` | Hull albedo and the per-pixel item label raster |
 | `*/frames/*.png` | Camera images |
-| `*/gt/*.npz` | Per-pixel label, depth, pixel footprint and contrast-to-noise ratio |
+| `*/gt/*.npz` | Per-pixel label, depth, pixel footprint, contrast-to-noise ratio and the referee's inspectable mask |
 | `survey/frames.jsonl` | Pose, camera pose, exposure and gain, newly covered cells, visible items with pixel counts |
 | `*/coverage.json`, `coverage.png` | Coverage fraction, per-item inspection verdict, coverage map |
 | `mission/frames.jsonl` | Per frame: true camera pose, phase and leg, exposure, gain and blur, active faults, the onboard verdict (claimed, uncertain, black, below limits) with its estimated camera pose and uncertainty, camera position error along the ship, girth and normal |
 | `mission/coverage.json` | Referee coverage and items, claimed against true coverage, rounds and legs, navigation error, EKF summary, minimum clearance, contacts, fault log |
 | `mission/claimed.png`, `claim_check.png` | Claimed coverage; agreement map (green both, red claimed but not seen, blue seen but not claimed) |
 | `mission/trajectory.npz` | Per control tick: true pose, estimate, reference, thrust, position uncertainty, camera tilt, clearance |
+| `dataset/images`, `masks`, `labels` | Per split: images, class masks (0 background, k = class k), YOLO box labels |
+| `dataset/annotations.json` | Classes, splits, and per frame every visible object: item, class, box, pixels, inspectable share, size, required |
 
 ## Tests
 
@@ -230,9 +291,15 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
   motion blur, blackout frames, determinism;
 - planning and the referee: full coverage of a planned survey, a plan with a missing lane caught,
   an impossible standoff refused, configuration validation, scenario determinism and exact areas;
+- perception: the referee's hits, false alarms, ignored objects, items across hulls and average
+  precision on known cases; dataset objects against the per-pixel ground truth; the baseline
+  rejecting weld seams and finding corrosion on the test hull;
 - missions: nominal (full coverage, no false claims, no contact, hull-end fixes on every lane);
   blackout and turbidity holes found and revisited; DVL dropout with and without hull-end fixes,
-  never over-claimed; determinism.
+  never over-claimed; the faults the vehicle absorbs (stuck depth caught by the frozen-value check,
+  compass, gyro bias, sounder dropout, dead thruster); a low battery aborting the mission and
+  surfacing along the hull; claims shrinking by the pose uncertainty except at band and hull edges;
+  an empty battery driving nothing; determinism.
 
 ## Roadmap
 
@@ -240,7 +307,8 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 2. ~~Vehicle in the loop: dynamics, navigation drift (`auv_navigation_fusion`), camera faults;
    replanning when coverage holes appear.~~
 3. Perception: pretrained models (depth, segmentation, features) and a fine-tuned defect detector,
-   scored against the ground truth per class and per size.
+   scored against the ground truth per class and per size. *Done so far: datasets, the perception
+   referee, a classical baseline.*
 4. Defect map and report: defects placed on the hull with sizes and evidence frames; a second
    survey with grown defects for change detection; inspector review.
 5. Production layer: simulation tests in CI that gate merges on coverage and detection metrics,

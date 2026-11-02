@@ -217,12 +217,43 @@ onboard:
   claim_pixel_stride: 2        # pixel step when projecting a frame onto the hull model (keep below cell size)
   claim_max_std_m: [0.3, 0.05] # 1-sigma position uncertainty along the ship / along the girth above which
                                # a frame is not claimed (lane end margin and lane overlap absorb less)
+  claim_sigma_k: 2.0           # below it, each frame's footprint shrinks by this many sigma before it is claimed
   replan_rounds: 2             # revisit rounds for holes in the claimed coverage
+  battery_reserve_pct: 20.0    # below this state of charge the vehicle abandons the mission and surfaces
+  frozen_samples: 5            # this many identical depth readings in a row: the sensor is frozen, exclude it
   hole_merge_m: 0.3            # holes closer than this are revisited together
   revisit_margin_m: 0.3        # revisit lanes extend this far beyond a hole along the ship
 
 mission:
   max_seconds: 3600.0          # simulated time limit
+
+perception:                    # datasets from recorded frames and the scoring of detectors
+  classes: [corrosion, coating_damage, biofouling, crack, missing_anode, anode]
+  min_visible_px: 50           # an item with fewer pixels in a frame is not expected to be found there
+  min_inspectable_share: 0.5   # nor when less than this share of its pixels meets the coverage limits
+  iou_match: 0.5               # box overlap for a detection to match an object
+  size_bins_m2: [0.01, 0.05]   # defect area: small below the first, medium below the second, large above
+  score_threshold: 0.5         # detections at or above this score are reported as findings
+  splits: [0.7, 0.15, 0.15]    # train / val / test shares, assigned per scenario seed
+
+baseline:                      # classical detector: colour and brightness anomalies against the hull paint
+  dark_level: 0.06             # pixels darker than this share of full scale are water, not hull
+  flat_field_degree: 4         # illumination: 2-D polynomial in log brightness over the image ...
+  fit_iterations: 3            # ... refitted this many times ...
+  fit_reject_mad: 2.5          # ... without pixels this many median deviations away (defects, seams)
+  fit_step_px: 4               # fit on every n-th pixel
+  smooth_px: 1.5               # Gaussian smoothing of the colour deviations before the anomaly test
+  threshold_mad: 3.0           # anomaly: colour distance from the paint above this many median deviations
+  open_px: 1                   # morphological opening (removes speckle)
+  close_px: 3                  # morphological closing (joins fragments)
+  min_area_px: 60
+  seam_length_share: 0.45      # dark features longer than this share of the image are weld seams ...
+  seam_width_px: 8             # ... and so are dark lines at most this wide ...
+  seam_aspect: 3.0             # ... and at least this elongated along an image axis
+  edge_px: 6                   # components mostly within this distance of the hull's edge are the water boundary
+  containment: 0.7             # a detection lying this much inside a larger one is part of it
+  rectangle_fill: 0.8          # components filling this share of their box are rectangles (anode fittings)
+  anode_green_mad: 8.0         # a bright rectangle above this green deviation is an anode, else a footprint
 
 # Fault schedule: [{type, t_start, duration (null = permanent), params}]; types in faults.py.
 faults: []

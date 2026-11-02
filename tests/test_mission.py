@@ -57,7 +57,7 @@ def test_camera_blackout_leaves_a_hole_that_the_vehicle_finds_and_revisits(tmp_p
     survey = s['rounds'][0]
     assert s['claimed']['frames']['black'] >= 3
     assert survey['coverage_fraction_after'] < 0.99                                        # a real hole
-    assert abs(survey['claimed_fraction_after'] - survey['coverage_fraction_after']) < 0.005   # the vehicle saw it
+    assert 0 <= survey['coverage_fraction_after'] - survey['claimed_fraction_after'] < 0.01   # the vehicle saw it, and claims no more than is true
     assert s['rounds'][1]['phase'] == 'revisit_1' and s['rounds'][1]['frames'] > 0
     assert s['coverage_fraction'] == 1.0 and s['claimed']['false_claim_fraction'] == 0.0
 
@@ -67,7 +67,7 @@ def test_turbid_water_is_measured_and_not_claimed(tmp_path, small_scn):
     s = mission.run(scn, str(tmp_path), save_frames=False)
     survey = s['rounds'][0]
     assert s['claimed']['frames']['below_limits'] >= 3 and survey['coverage_fraction_after'] < 0.99
-    assert abs(survey['claimed_fraction_after'] - survey['coverage_fraction_after']) < 0.005
+    assert 0 <= survey['coverage_fraction_after'] - survey['claimed_fraction_after'] < 0.01
     assert s['coverage_fraction'] == 1.0 and s['claimed']['false_claim_fraction'] == 0.0
 
 
@@ -97,3 +97,35 @@ def test_mission_is_deterministic(tmp_path, small_scn):
         runs.append((np.load(out / 'trajectory.npz')['data'], (out / 'frames.jsonl').read_text()))
     assert np.array_equal(runs[0][0], runs[1][0]) and runs[0][1] == runs[1][1]
     assert len(runs[0][1].splitlines()) > 0
+
+
+def test_faults_the_vehicle_absorbs_cost_no_coverage_and_no_honesty(tmp_path, small_scn):
+    """A stuck depth sensor (caught by the frozen-value check), a compass offset and a gyro bias (handled
+    by the navigation filter), a sounder dropout (frames marked uncertain) and a dead thruster."""
+    scn = _with_run(small_scn, faults=[
+        {'type': 'pressure_stuck', 't_start': 20.0, 'duration': 20.0},
+        {'type': 'compass_disturbance', 't_start': 40.0, 'duration': 20.0, 'params': {'offset_deg': 20.0}},
+        {'type': 'imu_bias', 't_start': 60.0, 'params': {'gyro_bias_z': 0.02}},
+        {'type': 'standoff_dropout', 't_start': 80.0, 'duration': 15.0},
+        {'type': 'thruster_dead', 't_start': 100.0, 'params': {'name': 'sway_front'}}])
+    s = mission.run(scn, str(tmp_path), save_frames=False)
+    assert s['aborted'] is None and s['contacts']['ticks'] == 0
+    assert s['coverage_fraction'] == 1.0 and s['claimed']['fraction'] == 1.0 and s['claimed']['false_claim_fraction'] == 0.0
+    nav = s['navigation']
+    events = [(h['sensor'], h['event'].split(':')[0], h['t']) for h in nav['health']]
+    assert events[0][:2] == ('pressure', 'frozen') and 20.0 < events[0][2] < 21.0
+    assert events[1][:2] == ('pressure', 'live again') and 40.0 <= events[1][2] < 41.0
+    assert nav['ekf']['updates']['compass']['rejected'] > 100
+    assert nav['camera_error_max_m']['girth'] < 0.05
+
+
+def test_low_battery_aborts_the_mission_and_surfaces_along_the_hull(tmp_path, small_scn):
+    scn = _with_run(small_scn, faults=[{'type': 'battery_drop', 't_start': 80.0, 'params': {'drop_pct': 95.0}}])
+    s = mission.run(scn, str(tmp_path), save_frames=False)
+    assert s['aborted'].startswith('battery reserve')
+    abort = s['legs'][-1]
+    assert abort['phase'] == 'abort' and abort['outcome'] == 'done' and abort['to_xs'][1] == 0.0
+    traj = np.load(tmp_path / 'trajectory.npz')
+    assert -traj['data'][-1, 3] < 0.5                            # at the surface
+    assert s['contacts']['ticks'] == 0
+    assert s['coverage_fraction'] < 0.9 and s['claimed']['false_claim_fraction'] == 0.0   # honest about the rest

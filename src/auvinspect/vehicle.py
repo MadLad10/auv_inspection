@@ -53,7 +53,7 @@ class Vehicle:
         """Apply thruster requests (N) for one control tick (the only actuation path)."""
         m = self.model
         self.thrust_cmd = np.clip(np.asarray(thrust_cmd, float), -m.max_thrust, m.max_thrust)
-        health = np.ones(len(m.thruster_names))
+        health = np.full(len(m.thruster_names), 1.0 if self.energy_wh > 0 else 0.0)   # an empty battery drives nothing
         for f in self.faults.all('thruster_dead', self.t):
             if f.params.get('name') in m.thruster_names:
                 health[m.thruster_names.index(f.params['name'])] = 0.0

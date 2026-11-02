@@ -1,4 +1,5 @@
-"""Command line: generate scenarios, run surveys and vehicle-in-the-loop missions, render previews."""
+"""Command line: generate scenarios, run surveys and vehicle-in-the-loop missions, build perception
+datasets, run and score detectors, render previews."""
 from __future__ import annotations
 
 import argparse
@@ -39,6 +40,33 @@ def _mission(a):
     print(json.dumps(out, indent=1))
 
 
+def _dataset(a):
+    from .dataset import export
+    print(json.dumps(export(a.run, a.out, config_mod.load(a.config)), indent=1))
+
+
+def _detect(a):
+    from .baseline import run
+    det = run(a.dataset, config_mod.load(a.config), a.split)
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    with open(a.out, 'w') as f:
+        json.dump(det, f)
+    print(json.dumps({'frames': len(det), 'detections': sum(len(v) for v in det.values()), 'out': a.out}))
+
+
+def _evaluate(a):
+    from .perception import evaluate
+    with open(os.path.join(a.dataset, 'annotations.json')) as f:
+        ann = json.load(f)
+    with open(a.detections) as f:
+        det = json.load(f)
+    m = evaluate(ann, det, config_mod.load(a.config), a.split)
+    if a.out:
+        with open(a.out, 'w') as f:
+            json.dump(m, f, indent=1)
+    print(json.dumps(m, indent=1))
+
+
 def _preview(a):
     from .preview import rig_sheet, texture_sheet
     scn = Scenario.load(a.scenario, config_mod.load(a.config))
@@ -72,6 +100,24 @@ def main(argv=None):
     m.add_argument('--seed', type=int, help='mission seed (sensor noise, initial fix); default: the scenario seed')
     m.add_argument('--config', help='YAML run settings (vehicle, navigation, faults, ...) merged over the defaults')
     m.set_defaults(fn=_mission)
+    d = sub.add_parser('dataset', help='export a labelled perception dataset from recorded runs')
+    d.add_argument('--run', action='append', required=True, help='a survey or mission directory inside its scenario directory (repeatable)')
+    d.add_argument('--out', required=True)
+    d.add_argument('--config', help='YAML run settings merged over the defaults')
+    d.set_defaults(fn=_dataset)
+    t = sub.add_parser('detect', help='run the classical baseline detector over a dataset')
+    t.add_argument('--dataset', required=True)
+    t.add_argument('--out', required=True, help='detections JSON')
+    t.add_argument('--split', choices=['train', 'val', 'test'])
+    t.add_argument('--config', help='YAML run settings merged over the defaults')
+    t.set_defaults(fn=_detect)
+    e = sub.add_parser('evaluate', help='score detections against the ground truth (the perception referee)')
+    e.add_argument('--dataset', required=True)
+    e.add_argument('--detections', required=True)
+    e.add_argument('--split', choices=['train', 'val', 'test'])
+    e.add_argument('--out', help='metrics JSON')
+    e.add_argument('--config', help='YAML run settings merged over the defaults')
+    e.set_defaults(fn=_evaluate)
     v = sub.add_parser('preview', help='render the rig at one pose, or the annotated texture')
     v.add_argument('--scenario', required=True)
     v.add_argument('--out', required=True)

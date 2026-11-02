@@ -158,8 +158,18 @@ def _validate_mission(cfg: dict) -> None:
     _check(isinstance(o['claim_pixel_stride'], int) and o['claim_pixel_stride'] >= 1, 'onboard.claim_pixel_stride must be an integer >= 1')
     _check(isinstance(o['replan_rounds'], int) and o['replan_rounds'] >= 0, 'onboard.replan_rounds must be an integer >= 0')
     _check(len(o['claim_max_std_m']) == 2 and min(o['claim_max_std_m']) > 0, 'onboard.claim_max_std_m must be two positive values')
-    _check(o['dead_frame_std_dn'] >= 0, 'onboard.dead_frame_std_dn must be non-negative')
+    _check(o['dead_frame_std_dn'] >= 0 and o['claim_sigma_k'] >= 0, 'onboard.dead_frame_std_dn / claim_sigma_k must be non-negative')
+    _check(0 <= o['battery_reserve_pct'] <= 100, 'onboard.battery_reserve_pct must be in [0, 100]')
+    _check(isinstance(o['frozen_samples'], int) and o['frozen_samples'] >= 2, 'onboard.frozen_samples must be an integer >= 2')
     _check(cfg['mission']['max_seconds'] > 0, 'mission.max_seconds must be positive')
+    p = cfg['perception']
+    _check(set(p['classes']) <= {'corrosion', 'coating_damage', 'biofouling', 'crack', 'missing_anode', 'anode'} and p['classes'],
+           'perception.classes must be scenario item classes')
+    _check(0 < p['iou_match'] <= 1 and 0 <= p['min_inspectable_share'] <= 1 and 0 <= p['score_threshold'] <= 1,
+           'perception.iou_match, min_inspectable_share and score_threshold must be shares')
+    _check(len(p['splits']) == 3 and min(p['splits']) >= 0 and abs(sum(p['splits']) - 1) < 1e-9, 'perception.splits must be three shares summing to 1')
+    _check(list(p['size_bins_m2']) == sorted(p['size_bins_m2']), 'perception.size_bins_m2 must be increasing')
+    _check(cfg['baseline']['threshold_mad'] > 0 and cfg['baseline']['fit_step_px'] >= 1, 'baseline.threshold_mad / fit_step_px out of range')
     _check(isinstance(cfg['faults'], list), 'faults must be a list')
     for f in cfg['faults']:
         _check(isinstance(f, dict) and f.get('type') in FAULT_TYPES, f'faults: unknown fault {f!r}; known: {sorted(FAULT_TYPES)}')

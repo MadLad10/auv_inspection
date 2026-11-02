@@ -47,3 +47,18 @@ def test_saved_frames_carry_ground_truth(tmp_path, small_cfg):
     assert gt['label'].shape == (cfg['cameras']['height'], cfg['cameras']['width'])
     seen = set().union(*(map(int, l['visible_items']) for l in lines))
     assert {d['id'] for d in scn.defects()} <= seen
+
+
+def test_claims_shrink_by_the_pose_uncertainty_but_not_at_the_band_or_hull_edges(small_cfg, small_scn):
+    from auvinspect.coverage import CellGrid
+    g = CellGrid(small_scn.hull, small_cfg)
+    xx, ss = np.meshgrid(np.arange(1.0, 2.0, 0.005), np.arange(1.0, 1.6, 0.005))
+    full = g.cells(xx.ravel(), ss.ravel())
+    assert np.unique(full[full >= 0]).size == 50 * 30
+    assert g.eroded_cells(xx.ravel(), ss.ravel(), 0.1, 0.04).size == (50 - 10) * (30 - 4)
+    # a footprint reaching past the hull end and above the band keeps those edges
+    g0 = small_cfg['hull']['inspect_girth_m'][0]
+    xx, ss = np.meshgrid(np.arange(-0.5, 0.5, 0.005), np.arange(g0 - 0.3, g0 + 0.3, 0.005))
+    cells = g.eroded_cells(xx.ravel(), ss.ravel(), 0.1, 0.04)
+    js, ix = np.divmod(cells, g.nx)
+    assert ix.min() == 0 and js.min() == 0 and ix.max() == 25 - 5 - 1 and js.max() == 15 - 2 - 1

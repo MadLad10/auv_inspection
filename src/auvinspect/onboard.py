@@ -12,12 +12,18 @@ ray cast):
             crosses x = 0 or x = L: an along-ship position fix, twice per lane. Between fixes the
             along-ship uncertainty grows with dead reckoning.
 
+A sensor health check excludes the depth sensor from navigation while its readings are frozen
+(onboard.frozen_samples identical readings in a row: a live sensor always shows noise). A gate
+cannot see a sensor stuck at a plausible value; while it is excluded, depth comes from the DVL and
+the standoff sounder, and the growing uncertainty reaches the claim logic.
+
 Each frame is checked (a constant, noiseless frame means a dead camera and is rejected) and projected onto the hull model from the
 estimated camera pose (navigation estimate, AHRS roll and pitch, tilt encoder). The pixels that would
 pass the coverage limits, judged with the image physics (predict.py) for the water the water-quality
 sensor measures and the exposure and gain the camera used, form the frame's claimed footprint. When the position uncertainty along the
 ship or along the girth exceeds onboard.claim_max_std_m, the footprint is kept as seen but unverified
-rather than claimed. Holes are cells not claimed (never seen, or seen only while uncertain); each
+rather than claimed. Below that, the footprint is shrunk by onboard.claim_sigma_k times those
+uncertainties before it is claimed, so a claim survives the pose error the vehicle expects. Holes are cells not claimed (never seen, or seen only while uncertain); each
 cluster gets revisit lanes placed with the planner's own strip rules. Revisits are not flown while
 the vehicle is itself too uncertain of its position to claim what it would see.
 """
@@ -63,15 +69,22 @@ class Onboard:
         self._last_standoff = -math.inf
         self._prev_beam: tuple[bool, float] | None = None
         self.echo = False                         # the standoff sounder currently sees the hull
+        self.battery = 100.0                      # state of charge (%) from the battery monitor
+        self.blocked: set[str] = set()            # sensors the health check excludes from navigation
+        self.health_log: list[dict] = []
+        self._depths: list[float] = []
+        self._last_depth_t = -math.inf
         self.standoff_stats = {'accepted': 0, 'rejected': 0}
         self.hull_end_stats = {'accepted': 0, 'rejected': 0}
         self._strips = None
 
     # ------------------------------------------------------------------ navigation
     def update(self, readings: dict, t: float):
-        self.nav.update({k: readings[k] for k in NAV_SENSORS if k in readings}, time_s=t)
+        self._check_depth(readings.get('pressure'), t)
+        self.nav.update({k: readings[k] for k in NAV_SENSORS if k in readings}, time_s=t, blocked=self.blocked)
         self.imu = readings.get('imu', self.imu)
         self.tilt = readings['tilt']['deg']
+        self.battery = readings.get('battery', {}).get('percent', self.battery)
         tilt_deg = self.tilt
         wq = readings.get('water_quality')
         if wq is not None:
@@ -90,6 +103,21 @@ class Onboard:
                 self._hull_end_update(prev[1], x_beam, lost=prev[0], tilt_deg=tilt_deg)
             if so['valid'] and n['standoff_update']:
                 self._standoff_update(so['range'], tilt_deg)
+
+    def _check_depth(self, p: dict | None, t: float):
+        """Exclude the depth sensor while its last onboard.frozen_samples readings are identical."""
+        if p is None or p['t'] <= self._last_depth_t:
+            return
+        self._last_depth_t = p['t']
+        n = self.cfg['onboard']['frozen_samples']
+        self._depths = (self._depths + [p['depth']])[-n:]
+        frozen = len(self._depths) == n and len(set(self._depths)) == 1
+        if frozen and 'pressure' not in self.blocked:
+            self.blocked.add('pressure')
+            self.health_log.append({'t': round(t, 3), 'sensor': 'pressure', 'event': 'frozen: excluded'})
+        elif 'pressure' in self.blocked and self._depths[-1] != self._depths[-2]:
+            self.blocked.discard('pressure')
+            self.health_log.append({'t': round(t, 3), 'sensor': 'pressure', 'event': 'live again: restored'})
 
     def state(self) -> dict:
         st = self.nav.state()
@@ -166,8 +194,9 @@ class Onboard:
 
     # ------------------------------------------------------------------ frames
     def footprint(self, c: np.ndarray, A: np.ndarray, exposure_s: float, gain: float) -> tuple[np.ndarray, np.ndarray]:
-        """Hull (x, s) of the sampled pixels that would pass the coverage limits, seen from pose (c, A)."""
-        v = predict.view(self.hull, self.cfg, c, A, self.rays_cam, self.water)
+        """Hull (x, s) of the sampled pixels that would pass the coverage limits, seen from pose (c, A),
+        on the hull section extended past its ends (the grid keeps only the real hull)."""
+        v = predict.view(self.hull, self.cfg, c, A, self.rays_cam, self.water, bounded=False)
         ok = predict.quality(v, self.cfg, self.water, exposure_s, gain)
         return v['x'][ok], v['s'][ok]
 
@@ -188,7 +217,20 @@ class Onboard:
         if sa > lim[0] or sg > lim[1]:
             self.unverified.add_points(x, s)
             return {**rec, 'claim': 'uncertain', 'claimed_new': 0}
-        return {**rec, 'claim': 'claimed', 'claimed_new': self.claimed.add_points(x, s)}
+        k = self.cfg['onboard']['claim_sigma_k']           # claim only what stays covered if the pose is off by k sigma
+        self.unverified.add_points(x, s)
+        return {**rec, 'claim': 'claimed', 'claimed_new': self.claimed.add_cells(self.claimed.eroded_cells(x, s, k * sa, k * sg))}
+
+    def battery_low(self) -> bool:
+        return self.battery < self.cfg['onboard']['battery_reserve_pct']
+
+    def camera_hull_xs(self) -> tuple[float, float]:
+        """Hull coordinates where the camera's optical axis meets the hull (its own position's projection
+        when it does not)."""
+        c, A = self.camera_pose(self.tilt)
+        t = float(np.nan_to_num(self.hull.raycast(c, -A[:, 2]), posinf=0.0))
+        x, s, _ = self.hull.inverse(c + t * -A[:, 2])
+        return float(x), float(s)
 
     # ------------------------------------------------------------------ holes and revisits
     def can_claim(self) -> bool:
@@ -229,8 +271,7 @@ class Onboard:
         sv, v, o = cfg['survey'], cfg['vehicle'], cfg['onboard']
         if self._strips is None:
             self._strips = strips(hull, cfg)
-        c, A = self.camera_pose(self.tilt)
-        cx, cs, _ = (float(u) for u in hull.inverse(c + float(np.nan_to_num(hull.raycast(c, -A[:, 2]), posinf=0.0)) * -A[:, 2]))
+        cx, cs = self.camera_hull_xs()
         phase = f'revisit_{round_k}'
         legs, todo = [], list(holes)
         while todo:

@@ -8,7 +8,9 @@ Each control tick (vehicle.control_dt_s):
   3. guidance and control (guidance.py) turn the estimate into thruster requests;
   4. the dynamics advance one tick.
 After the planned survey the vehicle plans revisits of the holes in its claimed coverage, for up to
-onboard.replan_rounds rounds. The referee then reports the true coverage, where the claim departs
+onboard.replan_rounds rounds. When its battery monitor reads below onboard.battery_reserve_pct, the
+vehicle abandons the mission and climbs along the hull at the standoff to the waterline (a path that
+keeps clear of the hull, even from under the bilge). The referee then reports the true coverage, where the claim departs
 from it, the navigation error, the clearance to the hull and the fault log.
 """
 from __future__ import annotations
@@ -24,7 +26,7 @@ from PIL import Image
 
 from .camera import axes
 from .coverage import Coverage
-from .guidance import Controller, LegFollower, Path, survey_legs
+from .guidance import Controller, Leg, LegFollower, Path, survey_legs
 from .onboard import Onboard
 from .render import InspectionRenderer
 from .rng import stream
@@ -68,6 +70,7 @@ class _Mission:
         self.claims = {'claimed': 0, 'uncertain': 0, 'black': 0, 'below_limits': 0}
         self.leg_log: list[dict] = []
         self.aborted = None
+        self.surfacing = False
 
     # ------------------------------------------------------------------ one leg
     def fly(self, leg, leg_index: int, fj) -> str:
@@ -77,6 +80,9 @@ class _Mission:
         t_end = self.vehicle.t + v['leg_timeout_factor'] * max(fol.nominal_duration(), v['lead_m'] / leg.speed)
         while True:
             self.onboard.update(self.vehicle.readings(), self.vehicle.t)
+            if not self.surfacing and self.onboard.battery_low():
+                self.aborted = f'battery reserve ({self.onboard.battery:.0f}%) at t={self.vehicle.t:.2f} s'
+                return 'aborted'
             p_est = self.onboard.position()
             if fol.searching:
                 if not self.onboard.echo:
@@ -132,7 +138,7 @@ class _Mission:
                 rec['cam_error_hull_m'] = self._hull_error(np.asarray(ob['cam_pos_est']), f.cam_pos, f.cam_mat)
                 self.frame_errors.append(rec['cam_error_hull_m'])
             if self.save_frames:
-                save_frame(self.out_dir, name, f)
+                save_frame(self.out_dir, name, f, self.referee.quality(f))
             fj.write(json.dumps(rec) + '\n')
 
     def _hull_error(self, c_est, c_true, A) -> list[float]:
@@ -160,6 +166,8 @@ class _Mission:
                                          'from_xs': _r([leg.x[0], leg.s[0]], 3), 'to_xs': _r([leg.x[-1], leg.s[-1]], 3),
                                          't': [round(t_start, 2), round(self.vehicle.t, 2)]})
                     if res == 'aborted':
+                        if self.aborted.startswith('battery'):
+                            self.surface(fj)
                         break
                     outcome[res] += 1
                 rounds.append({'phase': legs[0].phase if legs else f'revisit_{k}', 'legs': len(legs), 'legs_timed_out': outcome['timeout'],
@@ -178,6 +186,16 @@ class _Mission:
                     break
         remaining = self.onboard.holes()
         return self.summary(rounds, remaining, time.time() - t0)
+
+    def surface(self, fj):
+        """Abort: climb along the hull at the standoff to the waterline, taking no frames."""
+        self.surfacing = True
+        x, s = self.onboard.camera_hull_xs()
+        leg = Leg('transit', 'abort', [x, x], [s, 0.0], self.cfg['vehicle']['transit_speed_mps'])
+        t_start = self.vehicle.t
+        res = self.fly(leg, 0, fj)
+        self.leg_log.append({'phase': 'abort', 'kind': 'transit', 'lane': None, 'outcome': res, 'from_xs': _r([x, s], 3),
+                             'to_xs': _r([x, 0.0], 3), 't': [round(t_start, 2), round(self.vehicle.t, 2)]})
 
     def summary(self, rounds, remaining, elapsed) -> dict:
         ref = self.referee.summary()
@@ -207,6 +225,7 @@ class _Mission:
                 'standoff_updates': dict(self.onboard.standoff_stats),
                 'hull_end_updates': dict(self.onboard.hull_end_stats),
                 'ekf': self.onboard.nav.summary(),
+                'health': list(self.onboard.health_log),
             },
             'clearance_min_m': round(float(tk[:, -1].min()), 4) if len(tk) else None,
             'contacts': {'ticks': len(self.vehicle.contacts),

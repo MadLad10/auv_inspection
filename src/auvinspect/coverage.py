@@ -50,10 +50,39 @@ class CellGrid:
     def add_points(self, x: np.ndarray, s: np.ndarray) -> int:
         """Count each cell hit by these surface points once; return the number of newly covered cells."""
         cells = self.cells(x, s)
-        cells = np.unique(cells[cells >= 0])
+        return self.add_cells(np.unique(cells[cells >= 0]))
+
+    def add_cells(self, cells: np.ndarray) -> int:
+        """Count each of these (distinct) flat cell indices once; return the number newly covered."""
         new = int((self.hits.flat[cells] == 0).sum())
         self.hits.flat[cells] += 1
         return new
+
+    def eroded_cells(self, x: np.ndarray, s: np.ndarray, margin_x_m: float, margin_s_m: float) -> np.ndarray:
+        """Cells hit by these points that stay hit if the points shift by up to the margins along the
+        ship and along the girth: the footprint shrunk by the margins (separable erosion). Points may lie
+        outside the grid (past the hull ends on the extended surface, beyond the band): they hold the
+        footprint's edge out there, so only its real edges shrink."""
+        if len(x) == 0:
+            return np.zeros(0, np.int64)
+        ix_all = np.floor(np.asarray(x) / self.cell).astype(np.int64)
+        js_all = np.floor((np.asarray(s) - self.g0) / self.cell).astype(np.int64)
+        pairs = np.unique(np.stack([js_all, ix_all], 1), axis=0)
+        js, ix = pairs[:, 0], pairs[:, 1]
+        rx, rs = int(math.ceil(margin_x_m / self.cell)), int(math.ceil(margin_s_m / self.cell))
+        j0, i0 = js.min() - rs - 1, ix.min() - rx - 1
+        m = np.zeros((js.max() - j0 + rs + 2, ix.max() - i0 + rx + 2), bool)
+        m[js - j0, ix - i0] = True
+        for axis, r in ((1, rx), (0, rs)):
+            if r > 0:
+                c = np.cumsum(np.pad(m, [(r + 1, r) if a == axis else (0, 0) for a in range(2)]).astype(np.int32), axis=axis)
+                hi = np.take(c, np.arange(2 * r + 1, c.shape[axis]), axis=axis)
+                lo = np.take(c, np.arange(0, c.shape[axis] - 2 * r - 1), axis=axis)
+                m = (hi - lo) == 2 * r + 1                      # every cell within r is hit
+        jj, ii = np.nonzero(m)
+        jj, ii = jj + j0, ii + i0
+        ok = (jj >= 0) & (jj < self.ns) & (ii >= 0) & (ii < self.nx)
+        return jj[ok] * self.nx + ii[ok]
 
     def covered(self) -> np.ndarray:
         return self.hits > 0

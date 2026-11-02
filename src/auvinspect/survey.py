@@ -23,13 +23,14 @@ def visible_items(f) -> dict[int, int]:
     return {int(i): int(c) for i, c in zip(ids, counts)}
 
 
-def save_frame(out_dir: str, name: str, f):
+def save_frame(out_dir: str, name: str, f, quality: np.ndarray):
     """Image under frames/ and per-pixel ground truth under gt/: label, depth, pixel footprint on the
-    hull and the contrast-to-noise ratio of the reference defect over one coverage cell."""
+    hull, the contrast-to-noise ratio of the reference defect over one coverage cell, and whether the
+    pixel meets every coverage limit (the referee's `quality`)."""
     Image.fromarray(f.rgb).save(os.path.join(out_dir, 'frames', name + '.png'), compress_level=1)
     np.savez_compressed(os.path.join(out_dir, 'gt', name + '.npz'), label=f.label, depth=f.depth,
                         gsd_mm=np.where(f.on_hull, np.minimum(f.gsd_mm, 6e4), np.nan).astype(np.float16),
-                        cnr=np.minimum(f.cnr, 6e4).astype(np.float16))
+                        cnr=np.minimum(f.cnr, 6e4).astype(np.float16), quality=quality)
 
 
 def run(scn: Scenario, out_dir: str, save_frames: bool = True, cameras: list[str] | None = None) -> dict:
@@ -54,7 +55,7 @@ def run(scn: Scenario, out_dir: str, save_frames: bool = True, cameras: list[str
                     new = cov.add(f) if cam == inspect_cam else 0
                     name = f'{pose["index"]:05d}_{cam}'
                     if save_frames:
-                        save_frame(out_dir, name, f)
+                        save_frame(out_dir, name, f, cov.quality(f))
                     fj.write(json.dumps({
                         'frame': name, 'pose': pose, 'camera': cam,
                         'cam_pos': [round(float(v), 6) for v in f.cam_pos],

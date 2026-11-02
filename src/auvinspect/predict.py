@@ -18,15 +18,17 @@ from .coverage import within_limits
 from .hull import HullGeometry
 
 
-def view(hull: HullGeometry, cfg: dict, cam_pos: np.ndarray, cam_axes: np.ndarray, rays_cam: np.ndarray, water: dict) -> dict:
+def view(hull: HullGeometry, cfg: dict, cam_pos: np.ndarray, cam_axes: np.ndarray, rays_cam: np.ndarray, water: dict,
+         bounded: bool = True) -> dict:
     """Geometry and light for camera rays (q = (x, y, -1) in the camera frame) with the lamps mounted on
     this camera. Rays are a regular image grid (H, W, 3) or an ordered sequence (M, 3) of neighbouring
     rays; either way the backscatter is integrated on every optics.backscatter_grid_px-th ray and
-    interpolated in between (it varies slowly across the image)."""
+    interpolated in between (it varies slowly across the image). bounded=False extends the hull section
+    past its ends (for footprint geometry beyond them)."""
     q = np.asarray(rays_cam, float)
     qn = np.linalg.norm(q, axis=-1)
     dirs = (q / qn[..., None]) @ cam_axes.T
-    t = hull.raycast(cam_pos, dirs)
+    t = hull.raycast(cam_pos, dirs, bounded=bounded)
     hit = np.isfinite(t)
     pts = cam_pos + np.where(hit, t, 0.0)[..., None] * dirs
     x, s, _ = hull.inverse(pts)
