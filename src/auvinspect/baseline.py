@@ -85,13 +85,16 @@ def paint_reference(images: list[np.ndarray], cfg: dict) -> dict:
     return {'median': np.median(meds, 0).tolist(), 'mad': np.median(mads, 0).tolist()}
 
 
-def detect(rgb: np.ndarray, cfg: dict, reference: dict | None = None) -> list[dict]:
+def residual(rgb: np.ndarray, cfg: dict, reference: dict | None = None) -> dict | None:
+    """Log colour relative to the paint after the flat field (steps 1 and 2): 'log' per channel (the
+    log albedo ratio to the paint, roughly), 'dev' the same in median deviations of the paint (lightly
+    smoothed), 'z' their root-mean-square over the channels, and the 'hull' and 'paint' masks. None
+    when the frame shows too little hull."""
     b = cfg['baseline']
     img = rgb.astype(np.float32) / 255.0
-    H, W = img.shape[:2]
     hull = img.mean(-1) > b['dark_level']
     if hull.mean() < 0.05:
-        return []
+        return None
     paint, other = hull, None
     if reference:
         near = np.abs(_colour(img, hull, b) - reference['median']) < b['reference_band_mad'] * np.asarray(reference['mad'])
@@ -103,9 +106,22 @@ def detect(rgb: np.ndarray, cfg: dict, reference: dict | None = None) -> list[di
         dev = np.stack([ndimage.gaussian_filter(dev[..., c], b['smooth_px']) for c in range(3)], -1)
     centre = np.median(dev[paint], 0)
     mad = 1.4826 * np.median(np.abs(dev[paint] - centre), axis=0) + 1e-6
-    dev = (dev - centre) / mad                                    # in median deviations from the paint
-    z = np.sqrt((dev ** 2).mean(-1))
+    log = dev - centre
+    dev = log / mad                                               # in median deviations from the paint
+    return {'log': log, 'dev': dev, 'z': np.sqrt((dev ** 2).mean(-1)), 'hull': hull, 'paint': paint}
+
+
+def detect(rgb: np.ndarray, cfg: dict, reference: dict | None = None, exclude: np.ndarray | None = None) -> list[dict]:
+    """Detections in one frame; pixels in `exclude` (planned fittings) never join a detection."""
+    b = cfg['baseline']
+    H, W = rgb.shape[:2]
+    r = residual(rgb, cfg, reference)
+    if r is None:
+        return []
+    dev, z, hull = r['dev'], r['z'], r['hull']
     mask = hull & (z > b['threshold_mad'])
+    if exclude is not None:
+        mask &= ~exclude
     fouling_colour = (dev[..., 0] < 0) & (dev[..., 1] > 1.0)
     if b['open_px']:
         mask = ndimage.binary_opening(mask, iterations=b['open_px'])
@@ -183,10 +199,11 @@ def run(dataset_dir: str, cfg: dict, split: str | None = None) -> dict:
     return out
 
 
-def run_frames(run_dir: str, cfg: dict) -> dict:
-    """Detections for a recorded run's inspection-camera frames, keyed by frame name."""
+def run_frames(run_dir: str, cfg: dict, exclude: dict | None = None) -> dict:
+    """Detections for a recorded run's inspection-camera frames, keyed by frame name; `exclude` maps
+    frame names to masks of pixels left out (stations.window_masks)."""
     recs = [r for r in (json.loads(l) for l in open(os.path.join(run_dir, 'frames.jsonl')))
             if r['camera'] == cfg['survey']['camera'] and r.get('signal', True)]
     images = {r['frame']: np.asarray(Image.open(os.path.join(run_dir, 'frames', r['frame'] + '.png')).convert('RGB')) for r in recs}
     ref = paint_reference(list(images.values())[::cfg['baseline']['reference_stride']], cfg)
-    return {name: detect(img, cfg, ref) for name, img in images.items()}
+    return {name: detect(img, cfg, ref, (exclude or {}).get(name)) for name, img in images.items()}

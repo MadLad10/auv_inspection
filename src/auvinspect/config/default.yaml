@@ -128,7 +128,7 @@ coverage:
   max_range_m: 3.0
   max_incidence_deg: 50.0
   max_gsd_mm: 6.0              # worst-direction size of one pixel on the hull
-  reference_albedo: [0.40, 0.15, 0.11]   # the background a defect must stand out from (hull paint)
+  reference_albedo: paint      # the background a defect must stand out from: the hull's paint (appearance.paint_rgb), or an RGB triple
   reflectance_step: 0.05       # the faint defect to be seen: this albedo change on that background
   cnr_channel: 1               # colour channel the contrast-to-noise ratio is judged in
   min_cell_cnr: 5.0            # Rose criterion for that step over one cell
@@ -258,6 +258,13 @@ mapping:                       # findings on the hull map, fused across frames, 
   mosaic_cell_m: 0.01          # pixel size of the report's hull photomosaic; also the grid for a finding's area
   border_px: 8                 # a detection box this close to the image border is cut by it (the patch goes on)
 
+stations:                      # anode stations from the hull plan, each checked in the frames that see it
+  window_margin_m: 0.06        # the station window: the anode's plan footprint grown by this
+  glare_margin_m: 0.05         # detections within this of a window are the anode's glare: left to the station check
+  classes: [anode, missing_anode]   # detector classes the station check answers for; the defect map leaves them out
+  model: anode_stations.json   # trained station classifier, in the package's models directory
+  max_distance2: 50.0          # views farther than this (median squared Mahalanobis) from the status they chose: unclear
+
 baseline:                      # classical detector: colour and brightness anomalies against the hull paint
   dark_level: 0.06             # pixels darker than this share of full scale are water, not hull
   flat_field_degree: 4         # illumination: 2-D polynomial in log brightness over the image ...
@@ -279,6 +286,26 @@ baseline:                      # classical detector: colour and brightness anoma
   containment: 0.7             # a detection lying this much inside a larger one is part of it
   rectangle_fill: 0.8          # components filling this share of their box are rectangles (anode fittings)
   anode_green_mad: 8.0         # a bright rectangle above this green deviation is an anode, else a footprint
+
+benchmark:                     # suites of hulls, each flown as a full mission and scored by the referees
+  suites:                      # scenario seeds and world overrides; test is frozen: scored for a milestone, never tuned on
+    ci:                        # two short hulls: a quick check of every change, gated
+      seeds: [401, 402]
+      overrides: {hull: {length_m: 8.0}}
+      gate:                    # the pipeline is deterministic: a value moves only when the code does
+        min: {coverage: 0.99, map_recall_confirmed: 0.6, map_recall_all: 0.8, map_precision_confirmed: 0.6, station_accuracy: 0.83}
+        max: {false_claim: 0.005}
+    dev:  {seeds: [201, 202, 203, 204]}                             # for tuning
+    test: {seeds: [301, 302, 303, 304, 305, 306, 307, 308]}
+  world:                       # each hull's water and paint, drawn from its seed
+    visibility_m: [4.0, 15.0]  # uniform; the particle scattering is scaled to give it
+    paint_rgb:                 # antifouling paints, one drawn per hull
+      - [0.40, 0.15, 0.11]     # red-brown
+      - [0.09, 0.09, 0.10]     # black
+      - [0.10, 0.18, 0.30]     # blue
+  bootstrap: 2000              # resamples of the suite's hulls for each interval
+  interval: 0.95
+  min_hulls_for_interval: 5    # fewer hulls than this get no interval: resampling two or three understates the spread
 
 # Fault schedule: [{type, t_start, duration (null = permanent), params}]; types in faults.py.
 faults: []

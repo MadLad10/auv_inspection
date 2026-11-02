@@ -12,6 +12,18 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 
+def anode_stations(cfg: dict) -> list[dict]:
+    """The hull plan's anode stations (from the vessel's drawings, not from what is fitted now): id,
+    centre (x, s) and plan footprint box (x0, s0, x1, s1) of the anode, from a configuration holding
+    the hull and anodes sections."""
+    a = cfg['anodes']
+    L, _, H = a['size_m']
+    s = float(a['girth_m'])
+    xs = np.arange(a['spacing_m'] / 2, cfg['hull']['length_m'] - L / 2, a['spacing_m'])
+    return [{'id': f'S{k + 1:02d}', 'x': float(x), 's': s, 'box': [float(x) - L / 2, s - H / 2, float(x) + L / 2, s + H / 2]}
+            for k, x in enumerate(xs)]
+
+
 @dataclass(frozen=True)
 class HullGeometry:
     length: float

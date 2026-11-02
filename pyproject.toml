@@ -42,7 +42,7 @@ auvinspect = "auvinspect.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-auvinspect = ["config/*.yaml"]
+auvinspect = ["config/*.yaml", "models/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

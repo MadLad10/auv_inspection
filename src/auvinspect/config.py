@@ -182,6 +182,16 @@ def _validate_mission(cfg: dict) -> None:
     _check(m['samples_per_box'] >= 2 and 0 < m['merge_overlap'] <= 1 and m['merge_gap_m'] >= 0 and m['match_tolerance_m'] >= 0 and m['min_views'] >= 1
            and 0 <= m['confirm_support'] <= 1 and m['mosaic_cell_m'] > 0 and m['border_px'] >= 0,
            'mapping: samples_per_box >= 2, gaps and tolerances non-negative, min_views >= 1')
+    st = cfg['stations']
+    _check(st['window_margin_m'] >= 0 and st['glare_margin_m'] >= 0 and st['max_distance2'] > 0 and set(st['classes']) <= set(cfg['perception']['classes']),
+           'stations: window_margin_m >= 0, classes among perception.classes')
+    bm = cfg['benchmark']
+    lo, hi = bm['world']['visibility_m']
+    _check(0 < lo <= hi and bm['world']['paint_rgb'] and all(len(c) == 3 and min(c) >= 0 and max(c) <= 1 for c in bm['world']['paint_rgb'])
+           and bm['bootstrap'] >= 100 and 0 < bm['interval'] < 1 and bm['min_hulls_for_interval'] >= 2 and all(s['seeds'] for s in bm['suites'].values()),
+           'benchmark: visibility range positive, paints RGB in [0, 1], bootstrap >= 100, interval in (0, 1), suites with seeds')
+    ref = cfg['coverage']['reference_albedo']
+    _check(ref == 'paint' or (isinstance(ref, list) and len(ref) == 3), "coverage.reference_albedo: 'paint' or an RGB triple")
     _check(isinstance(cfg['faults'], list), 'faults must be a list')
     for f in cfg['faults']:
         _check(isinstance(f, dict) and f.get('type') in FAULT_TYPES, f'faults: unknown fault {f!r}; known: {sorted(FAULT_TYPES)}')

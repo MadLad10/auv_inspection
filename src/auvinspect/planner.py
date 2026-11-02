@@ -28,7 +28,7 @@ def camera_pose(hull: HullGeometry, cfg: dict, x: float, s: float) -> tuple[np.n
     return C, axes(cfg['cameras']['rig'][cfg['survey']['camera']]['look'], float(hull.turn_angle(s)))
 
 
-PLAN_SECTIONS = ('schema_version', 'hull', 'water', 'cameras', 'optics', 'coverage', 'survey')
+PLAN_SECTIONS = ('schema_version', 'hull', 'appearance', 'water', 'cameras', 'optics', 'coverage', 'survey')
 
 
 def _key(cfg: dict) -> str:

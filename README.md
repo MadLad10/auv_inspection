@@ -5,12 +5,13 @@ exact ground truth: every defect's position, outline and area is known, and ever
 knows which defect it shows. The pipeline can therefore be scored by an independent referee, not
 by its own claims.
 
-**Status:** milestone 2 of 6 done (vehicle in the loop), on a physically based environment: Fossen
+**Status:** milestones 1, 2 and 4 of 6 done, on a physically based environment: Fossen
 6-DOF vehicle dynamics with added mass and contact, Jaffe-McGlamery underwater image formation with
 a photon-counting camera, and a contrast-to-noise coverage criterion. Milestone 3 (perception) has
 its dataset exporter, perception referee and a classical baseline; learned models come next.
-Milestone 4 has the defect map, its referee, the inspection report with review statuses, the hull
-months later (grown and new defects, aged anodes) and change detection between two surveys.
+Milestone 4 has the defect map, anode stations checked against the hull plan, the inspection
+report with review statuses, the hull months later (grown and new defects, aged anodes) and change
+detection between two surveys.
 
 ## What it does now
 
@@ -138,9 +139,10 @@ baseline on the test split:
 
 Mean AP 0.29, 1.4 false alarms per frame. Colour-distinct defects are found; thin cracks, anodes
 (3-D fittings whose sides change their outline) and missing-anode footprints are not. This is the
-floor a learned detector has to beat.
+floor a learned detector has to beat. Anodes are therefore checked differently, at the stations of
+the hull plan (below).
 
-### Defect map and report (milestone 4, in progress)
+### Defect map, anode stations and report (milestone 4)
 
 - **Placing** ([`mapping.py`](src/auvinspect/mapping.py)). Each detection's box is cast onto the
   hull from the camera pose the vehicle estimated for that frame (navigation, AHRS, tilt encoder),
@@ -152,21 +154,53 @@ floor a learned detector has to beat.
   box, so partial views of a large patch merge while neighbours stay apart. A finding's support is
   the share of the frames that saw its spot (by the vehicle's own poses) in which it was detected;
   findings with support of at least 0.5 are *confirmed*, the rest *possible*. None is dropped.
+- **Anode stations** ([`stations.py`](src/auvinspect/stations.py)). The hull plan (the vessel's
+  drawings: `anodes.spacing_m`, `girth_m`, `size_m`) says where every anode should be, so each
+  station is asked what is fitted now: *intact*, *depleted* or *missing*; a station no frame saw is
+  *not inspected*, never missing. Every frame that sees a station within the coverage limits (by the
+  vehicle's own pose) measures the station window on the detector's paint-relative residual: the
+  area of off-paint pixels and the colour of those pixels and of the plan footprint. A linear
+  discriminant per paint scheme, trained on the training hulls with that paint (`train-stations`,
+  packaged as `models/anode_stations.json` with the scenarios it was trained on and the digest of
+  the settings its features depend on), scores each view; a station takes the status with the
+  highest summed log likelihood. Colours relative to the paint do not carry over between paints (a
+  slime film changes a black hull's colour far more than a red one's): one model for all paints
+  confused depleted and missing anodes. A station whose views lie far from the status they chose
+  (median squared Mahalanobis distance above `stations.max_distance2`), or on a hull whose paint has
+  no model, is *unclear*: left to the inspector rather than given a confident guess. The defect map
+  leaves anodes to the stations: detector anode classes, and detections
+  centred within `stations.glare_margin_m` of a station window (the bright metal's glare, which the
+  baseline takes for coating damage), make no findings, and the detector masks those zones so a
+  defect beside an anode is not merged with it.
 - **Report** ([`report.py`](src/auvinspect/report.py)). A hull photomosaic built from the vehicle's
-  own frames at its own poses (lamp falloff divided out), with the findings boxed, the unverified
-  areas hatched, a findings table with location, extent, area, support and an evidence crop, the
-  vehicle's health log, and a review status per finding read from `review.json`. A separate
-  appendix, marked simulation only, scores the map against the truth.
+  own frames at its own poses (lamp falloff divided out), with the findings boxed, the stations
+  marked by status, the unverified areas hatched, tables of findings (location, extent, area,
+  support, evidence crop) and stations (status, confidence, views, evidence crop), the vehicle's
+  health log, and a review status per finding and station read from `review.json`. A separate
+  appendix, marked simulation only, scores the map and the stations against the truth.
 - **Map referee.** A finding matches an item of its class when their hull boxes overlap; further
   findings on one item are duplicates. Required items are those the coverage referee counted
   inspected and that some frame showed with enough pixels to find; inspected items that never did
   (cracks about one pixel wide) are listed as below the camera's resolution.
 
-With the classical baseline on the seed-7 survey (simulation results): all findings cover 23 of the
-26 findable items; the 23 confirmed findings cover 17 of them at 78% precision. Matched findings sit
-within 1 to 6 cm of the true centres; areas come out at 1.13x the truth for corrosion and 1.09x for
-biofouling, but 2.2x for coating damage, whose flaked edge the baseline overestimates. Most false
-confirmed findings sit on anodes, whose bright bodies pass for coating damage.
+Seed 7 is the development hull: the map, glare margin and change-detection settings were tuned on
+it (and on its evolved versions), so the seed-7 numbers below are optimistic; the
+[benchmark](#benchmark) scores held-out hulls. With the classical baseline on the seed-7 survey
+(simulation results): all findings cover the 19 findable defects; the 21 confirmed findings cover
+17 of them at 86% precision. Matched findings sit within 1 to 6 cm of the true centres; areas come
+out at 1.13x the truth for corrosion and 1.09x for biofouling, but 1.7x for coating damage, whose
+flaked edge the baseline overestimates.
+
+The station model is trained on 17 hulls: the 7 red-brown training hulls of the perception dataset
+and 10 with varied water and paint (seeds 501 to 513, `generate --vary-world`; 3 red-brown, 3 blue,
+4 black). It gets every inspected station right on the 7 held-out red-brown hulls (49 stations: 34
+intact, 11 depleted, 4 missing; surveys at planned poses; with only 4 missing anodes the 95%
+interval for finding one runs from 40% to 100%), on the seed-7 missions at 0, 12 and 24 months (21
+stations, at the vehicle's estimated poses) and on the benchmark's dev hulls (28 stations), against
+6 of 33 anodes and none of 2 missing anodes found by the baseline detector on the test hulls. A
+model trained on red-brown hulls alone, given black hulls, got 19 of 21 stations right by luck and
+the other 2 wrong with confidence 1.0, at distances of 140 to 970 from every status (6 to 23 on a
+red-brown hull); such a station is now unclear.
 
 ### Change detection (milestone 4)
 
@@ -178,19 +212,73 @@ confirmed findings sit on anodes, whose bright bodies pass for coating damage.
   are untouched and every item keeps its id, so each change has exact ground truth. The evolved
   scenario records its base digest and the rates in its lineage, and has its own digest.
 - **Comparing two surveys** ([`change.py`](src/auvinspect/change.py)). The later survey's findings,
-  by score, pair with the earlier survey's findings of the same class (an anode may pair with a
-  missing-anode footprint) when their hull boxes overlap; each pair or lone finding is *new*,
-  *grown* (area ratio of at least `change.growth_ratio`, 1.25), *unchanged*, *anode lost* or
-  *gone*. The change referee checks each label against the item the later finding matches.
+  by score, pair with the earlier survey's findings of the same class when their hull boxes overlap;
+  each pair or lone finding is *new*, *grown* (area ratio of at least `change.growth_ratio`, 1.25),
+  *unchanged* or *gone*. Each station compares its two statuses: *anode depleted*, *anode lost*,
+  *anode replaced*, *unchanged*, or *unknown* when a survey did not inspect it. The change referee
+  checks each finding's label against the item the later finding matches, and each station's
+  against the change in its true status.
 
-Seed 7 evolved by 12 months (simulation results): corrosion grows 1.60x, coating damage 1.43x,
+Seed 7 (the development hull) evolved by 12 months (simulation results): corrosion grows 1.60x, coating damage 1.43x,
 fouling 2.5x, cracks by 4.8 cm; 8 new defects appear and one anode depletes. Comparing the two
 missions' maps, the confirmed findings flag all 5 new defects they found, with 3 false new
-labels, and 10 of the 15 grown defects they found, with no false growth; estimated growth ratios
-are within 6% of the truth (median). All 8 grown corrosion patches are flagged at 1.51x to 1.83x.
-Coating damage growth is missed (estimated 0.92x to 1.2x against 1.43x): the baseline's area for
-coating damage is dominated by its overestimated edge. All findings together flag all 7 new
-defects found, with 41 false new labels from the possible tier.
+labels, and 11 of the 15 grown defects they found, with no false growth; estimated growth ratios
+are within 6% of the truth (median). All 8 grown corrosion patches are flagged at 1.51x to 1.83x,
+and 3 of 4 fouling patches. Coating damage growth is missed (estimated 1.15x to 1.2x against
+1.43x): the baseline's area for coating damage is dominated by its overestimated edge. All findings
+together flag all 7 new defects found, with 38 false new labels from the possible tier. The station
+comparison flags the depleted anode and changes nothing else.
+
+At 24 months (fouling 6.3x, 11 new defects, two anodes depleted, one fallen off) the station
+comparison is right at all 7 stations, flagging both depletions and the lost anode. Finding changes
+are weaker once fouling patches cover square metres: the confirmed findings flag 9 of the 11 new
+defects found (8 false new labels) and 7 of 13 grown ones (4 false), with a median growth-ratio
+error of 23%.
+
+## Benchmark
+
+The numbers above come from a fixed world (one hull, one paint, 10 m visibility) and partly from the
+development hull. The benchmark ([`benchmark.py`](src/auvinspect/benchmark.py)) scores the whole
+pipeline on hulls it was not tuned on, in varied worlds:
+
+- **Suites** (`benchmark.suites`): `ci`, two 8 m hulls for a quick check of every change; `dev`,
+  four hulls for tuning; `test`, eight hulls, frozen: scored to report a milestone, never tuned on.
+- **Varied worlds.** Each hull draws from its seed a water visibility (4 to 15 m, by scaling the
+  particle scattering) and one of three antifouling paints (red-brown, black, blue). The coverage
+  criterion judges a faint defect against the hull's own paint. The training hulls of the detector
+  and the station model all have red-brown paint and 10 m water, so other paints and waters test
+  how far they carry.
+- **Per hull, end to end:** generate, fly the mission, detect, map, check the stations, report, and
+  keep the referees' verdicts in `result.json`.
+- **Score:** values pooled over the suite's hulls (items found over items required, stations right
+  over stations inspected, mean coverage) with a 95% interval from resampling hulls, since the hull
+  is the unit of independence; suites under five hulls get no interval.
+- **Gate:** `benchmark gate` fails (exit status 1) when a hull is missing or aborted, or a value
+  falls below its minimum (above its maximum) in `benchmark.gate`.
+
+```bash
+.venv/bin/auvinspect benchmark run   --suite dev --out runs/bench/dev            # all hulls; --seed for one
+.venv/bin/auvinspect benchmark score --suite dev --out runs/bench/dev            # writes benchmark.json
+.venv/bin/auvinspect benchmark gate  --suite ci  --out runs/bench/ci
+```
+
+Test suite, scored once for this milestone (simulation results; 8 hulls: 4 blue, 2 black, 2
+red-brown; visibility 4.8 to 12.5 m; 95% intervals from resampling hulls):
+
+| Value | Test suite |
+|---|---|
+| Coverage (referee), false claims | 100% on every hull, none |
+| Stations right | 55 / 56 (98%, 95 to 100%); 9 of 9 missing anodes found; 1 depleted anode called missing; none unclear |
+| Defects found by confirmed findings | 66% (57 to 76%) |
+| Defects found by any finding | 72% (64 to 80%) |
+| Precision of confirmed findings | 49% (38 to 63%); 10 false confirmed findings per hull |
+| Defects found, by class (any finding) | corrosion 100%, coating damage 91%, cracks 54%, fouling 29% |
+
+Coverage and the anode stations carry over to new water and paints. The defect detector does not:
+fouling is found on the two red-brown hulls (10 of 10) and on none of the six others (0 of 25), and
+the blue and black hulls carry 6 to 19 false confirmed findings each (12.5 on average) against 4 on
+each red-brown one. The cause is the detector's class rules, written for red-brown paint (see
+[Limitations](#limitations)); a detector trained on varied paints is the next step.
 
 ## Physics
 
@@ -259,7 +347,7 @@ sensor (attenuation and scattering), the tilt encoder, thruster telemetry and ba
 ~/.local/bin/uv venv .venv --python /usr/bin/python3.10
 ~/.local/bin/uv pip install --python .venv/bin/python -e ".[dev]"
 export MUJOCO_GL=egl
-.venv/bin/auvinspect generate --seed 7 --out runs/s7
+.venv/bin/auvinspect generate --seed 7 --out runs/s7       # --vary-world: water and paint drawn from the seed
 .venv/bin/auvinspect survey   --scenario runs/s7 --out runs/s7/survey
 .venv/bin/auvinspect mission  --scenario runs/s7 --out runs/s7/mission
 .venv/bin/auvinspect preview  --scenario runs/s7 --texture --out runs/s7/texture.png
@@ -294,8 +382,17 @@ Defect map and inspection report for a run (detections keyed by frame name; defa
 .venv/bin/auvinspect report --run runs/s7/mission --out runs/s7/report
 ```
 
-An inspector reviews findings by writing `runs/s7/report/review.json`, for example
-`{"F012": {"status": "rejected", "note": "weld seam"}}`, and re-running the report.
+An inspector reviews findings and stations by writing `runs/s7/report/review.json`, for example
+`{"F012": {"status": "rejected", "note": "weld seam"}, "S03": {"status": "confirmed"}}`, and
+re-running the report.
+
+Anode stations of recorded runs, and the station model refitted on training-split hulls (the
+command refuses others; `report --stations-model` and `stations --model` take the result):
+
+```bash
+.venv/bin/auvinspect stations --run runs/s7/mission
+.venv/bin/auvinspect train-stations --run runs/s101/survey --run runs/s102/survey --out runs/anode_stations.json
+```
 
 The same hull 12 months later, a second mission over it, and the changes between the two reports:
 
@@ -347,9 +444,13 @@ an index.
 | `report/report.html` | Inspection report: coverage, hull map, findings table with evidence, health log, simulation-only appendix |
 | `report/findings.json`, `metrics.json` | Findings (hull box, centre, area, views, support, tier, evidence, review, match) and the map referee |
 | `report/mosaic.png`, `map.png`, `map_vs_truth.png`, `evidence/` | Photomosaic, findings map, findings against true items, evidence crops |
+| `report/stations.json` | Each planned station: id, centre, plan box, status, confidence, views, evidence, review |
 | `report/manifest.json` | The run, its scenario directory and the scenario digest |
 | evolved `scenario.json` | As above, plus the lineage (base digest, months, rates); new items carry `new_after_months` |
-| `change/changes.json`, `metrics.json` | Each change (label, class, earlier and later finding, tier, area ratio) and the change referee for confirmed and all findings |
+| `change/changes.json`, `metrics.json` | Finding changes (label, class, earlier and later finding, tier, area ratio) and station changes (earlier and later status, label); the change referee for confirmed findings, all findings and stations |
+| `src/auvinspect/models/anode_stations.json` | The station model: per paint, class means and pooled covariance; settings digest; training hulls (seed, scenario digest, paint) |
+| `bench/<suite>/s<seed>/result.json` | One benchmark hull: drawn water and paint, the referees' verdicts (coverage, claims, map by tier and class, stations), versions |
+| `bench/<suite>/benchmark.json` | The suite: pooled values with intervals, per-hull rows, missing hulls, versions |
 
 ## Tests
 
@@ -375,6 +476,12 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 - mapping and report: perfect detections mapping every findable item in place with the right area;
   partial views fusing while neighbours stay apart; areas from whole views, or from the union of
   views cut by the image border; the report's files and review statuses;
+- anode stations: the plan holding every generated anode, the station check right on an unseen
+  hull with the packaged model, detections at a station making no findings, the classifier voting
+  over views, never guessing an unseen station, calling unclear what looks like no status or has
+  no model for its paint, the packaged model's settings, training split and paints;
+- benchmark: each hull's water and paint drawn from its seed, the coverage criterion following the
+  paint, scores pooled over hulls with intervals only for enough hulls, the gate;
 - change: evolution growing patches no faster than their rate, extending cracks by the configured
   length, keeping ids, old pixels and determinism, recording the base digest; change labels (new,
   grown, unchanged, anode lost, gone) and the change referee on known cases;
@@ -397,13 +504,14 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 3. Perception: pretrained models (depth, segmentation, features) and a fine-tuned defect detector,
    scored against the ground truth per class and per size. *Done so far: datasets, the perception
    referee, a classical baseline.*
-4. Defect map and report: defects placed on the hull with sizes and evidence frames; a second
-   survey with grown defects for change detection; inspector review. *Done so far: the map with
-   multi-view confirmation, the photomosaic report with review statuses, the map referee, scenario
-   evolution and change detection with its referee. Next: anode stations checked from the hull
-   plan.*
+4. ~~Defect map and report: defects placed on the hull with sizes and evidence frames; a second
+   survey with grown defects for change detection; inspector review.~~ The map with multi-view
+   confirmation and its referee, anode stations checked against the hull plan, the photomosaic
+   report with review statuses, scenario evolution and change detection with its referee.
 5. Production layer: simulation tests in CI that gate merges on coverage and detection metrics,
-   containers, model registry, observability, fault injection.
+   containers, model registry, observability, fault injection. *Done so far: the benchmark (suites
+   of hulls in varied water and paint, pooled scores with hull-resampling intervals, a gate), fault
+   injection in missions, models packaged with their provenance and settings digest.*
 6. Fleet: several vehicles sharing a structure under acoustic communication limits.
 
 ## Limitations
@@ -411,6 +519,9 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 - Simulation only. Numbers describe this simulator and must not be read as real-world performance.
 - Defect appearance is procedural until real defect imagery (for example a public hull-inspection
   dataset) is added.
+- The baseline detector's class rules were written for red-brown paint: on black paint fouling is
+  brighter than the paint in every channel and is taken for corrosion (on the benchmark's dev hulls
+  it finds 3 of 12 fouling patches, all 3 on the one red-brown hull). The anode stations have a model per paint; the detector does not yet.
 - Light: single scattering for backscatter, a single-scattering halo scaled to the multiply
   scattered power for forward scatter, Lambertian surfaces, three colour bands rather than spectra,
   no shadows cast by anodes, no marine snow. Water is uniform.

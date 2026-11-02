@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 from auvinspect import change, evolution
+from auvinspect.hull import anode_stations
 
 
 @pytest.fixture(scope='module')
@@ -45,23 +46,43 @@ def _item(iid, cls, area, **kw):
 def test_change_labels_and_their_score(small_cfg):
     before = [_f('A1', 'corrosion', [1.0, 1.0, 1.2, 1.2], 0.03, item=1),
               _f('A2', 'coating_damage', [3.0, 1.0, 3.3, 1.3], 0.05, item=2),
-              _f('A3', 'anode', [4.4, 2.5, 4.7, 2.7], 0.04, 'possible', item=3),
               _f('A4', 'corrosion', [6.0, 1.0, 6.1, 1.1], 0.01, 'possible')]                     # false, gone later
     after = [_f('B1', 'corrosion', [0.98, 0.98, 1.25, 1.25], 0.05, item=1),                    # grown x1.67
              _f('B2', 'coating_damage', [3.0, 1.0, 3.3, 1.3], 0.052, item=2),                  # unchanged
-             _f('B3', 'missing_anode', [4.4, 2.5, 4.7, 2.7], 0.04, item=3),                    # the anode fell off
+             _f('B3', 'corrosion', [3.0, 1.0, 3.3, 1.3], 0.05, 'possible'),                    # other class: no partner
              _f('B4', 'crack', [8.0, 2.0, 8.2, 2.01], 0.002, item=4),                          # new
              _f('B5', 'biofouling', [9.0, 1.0, 9.1, 1.1], 0.01, 'possible')]                    # false new
     changes = change.compare(before, after, small_cfg)
     got = {(c['before'], c['after']): (c['change'], c['tier']) for c in changes}
     assert got == {('A1', 'B1'): ('grown', 'confirmed'), ('A2', 'B2'): ('unchanged', 'confirmed'),
-                   ('A3', 'B3'): ('anode_lost', 'confirmed'), (None, 'B4'): ('new', 'confirmed'),
+                   (None, 'B3'): ('new', 'possible'), (None, 'B4'): ('new', 'confirmed'),
                    (None, 'B5'): ('new', 'possible'), ('A4', None): ('gone', 'possible')}
-    spec_a = {'items': [_item(1, 'corrosion', 0.03), _item(2, 'coating_damage', 0.05), _item(3, 'anode', None, status='intact')]}
-    spec_b = {'items': [_item(1, 'corrosion', 0.05), _item(2, 'coating_damage', 0.05), _item(3, 'missing_anode', 0.04),
-                        _item(4, 'crack', 0.002)]}
+    spec_a = {'items': [_item(1, 'corrosion', 0.03), _item(2, 'coating_damage', 0.05)]}
+    spec_b = {'items': [_item(1, 'corrosion', 0.05), _item(2, 'coating_damage', 0.05), _item(4, 'crack', 0.002)]}
     m = change.evaluate(changes, before, after, spec_a, spec_b, small_cfg)
-    assert m['new'] == {'found': 1, 'flagged': 1, 'recall': 1.0, 'false': 1}
+    assert m['new'] == {'found': 1, 'flagged': 1, 'recall': 1.0, 'false': 2}
     assert m['grown'] == {'found': 1, 'flagged': 1, 'recall': 1.0, 'false': 0}
-    assert m['anode_lost'] == {'found': 1, 'flagged': 1, 'recall': 1.0, 'false': 0}
     assert m['area_ratio_log_error_median'] == pytest.approx(np.log(1.04) / 2, abs=1e-3)   # median of 0 and log 1.04
+
+
+def test_station_changes_and_their_score(small_cfg):
+    assert [change.station_change(a, b) for a, b in (('intact', 'depleted'), ('depleted', 'missing'), ('intact', 'missing'),
+                                                       ('missing', 'intact'), ('depleted', 'depleted'), ('intact', 'not_inspected'))] \
+        == ['anode_depleted', 'anode_lost', 'anode_lost', 'anode_replaced', 'unchanged', 'unknown']
+    plan = anode_stations(small_cfg)
+    assert len(plan) == 2                                                   # the 6 m hull: stations at 1.5 and 4.5 m
+    st = lambda sid, status: {'id': sid, 'x': 0.0, 'status': status}
+    changes = change.compare_stations([st('S01', 'intact'), st('S02', 'depleted')], [st('S01', 'depleted'), st('S02', 'depleted')])
+    assert [c['change'] for c in changes] == ['anode_depleted', 'unchanged']
+
+    def spec(statuses):
+        items = []
+        for k, (p, status) in enumerate(zip(plan, statuses)):
+            if status == 'missing':
+                items.append({'id': k, 'class': 'missing_anode', 'bbox_xs': p['box']})
+            else:
+                items.append({'id': k, 'class': 'anode', 'status': status, 'centroid_xs': [p['x'], p['s']]})
+        return {'config': small_cfg, 'items': items}
+    m = change.evaluate_stations(changes, spec(['intact', 'intact']), spec(['depleted', 'missing']))
+    assert m['correct'] == 1 and m['anode_depleted'] == {'true': 1, 'flagged': 1, 'false': 0}
+    assert m['anode_lost'] == {'true': 1, 'flagged': 0, 'false': 0}         # S02 lost its anode; the check missed it

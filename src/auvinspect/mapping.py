@@ -8,6 +8,12 @@ on the hull in (x along the ship, s down the girth). Its area is the detector's 
 the surface area of a pixel at the box centre, or the box's area on the hull when the detector
 gives no pixel count.
 
+Anodes are left to the station check (stations.py): detections of the classes in stations.classes,
+and detections whose hull centre lies in a planned station's glare zone (its window grown by
+stations.glare_margin_m: the fitting and the glare of its bright metal, often taken for coating
+damage), make no findings, and the referee scores the other classes. The detector leaves those zones
+out too (stations.window_masks), so a defect beside an anode is not merged with it.
+
 Fusing: a view joins a finding of its class when its hull box and one of the finding's views overlap
 by at least mapping.merge_overlap of the smaller box (both grown by mapping.merge_gap_m); findings are
 built greedily from the highest score. Overlap relative to the smaller box joins partial views of a
@@ -38,7 +44,7 @@ import numpy as np
 
 from .camera import focal_px, pixel_area_mm2
 from .dataset import item_area, size_bin
-from .hull import HullGeometry
+from .hull import HullGeometry, anode_stations
 
 
 def camera_pose(rec: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -141,6 +147,11 @@ def _union_area(boxes: list[list[float]], cell: float) -> float:
     return float(grid.sum()) * cell * cell
 
 
+def map_classes(cfg: dict) -> list[str]:
+    """The classes the defect map reports (the station check answers for the rest)."""
+    return [c for c in cfg['perception']['classes'] if c not in cfg['stations']['classes']]
+
+
 def item_box(it: dict) -> list[float]:
     if 'bbox_xs' in it:
         return list(it['bbox_xs'])
@@ -152,7 +163,7 @@ def evaluate_map(findings: list[dict], spec: dict, inspected: set, cfg: dict, un
     """Score findings against the scenario's items (see module notes). Adds 'match' to each finding."""
     tol = cfg['mapping']['match_tolerance_m']
     bins = cfg['perception']['size_bins_m2']
-    items = [it for it in spec['items'] if it['class'] in cfg['perception']['classes']]
+    items = [it for it in spec['items'] if it['class'] in map_classes(cfg)]
     decoys = [f['bbox_xs'] for f in spec.get('features', []) if 'bbox_xs' in f]
     taken: dict[int, str] = {}
     for fd in sorted(findings, key=lambda f: -f['score']):
@@ -170,7 +181,7 @@ def evaluate_map(findings: list[dict], spec: dict, inspected: set, cfg: dict, un
         else:
             fd['match'] = {'false': True, 'on_decoy': any(_boxes_touch(d, fd['hull_box'], tol) for d in decoys)}
     per_class = {}
-    for cls in cfg['perception']['classes']:
+    for cls in map_classes(cfg):
         req = [it for it in items if it['class'] == cls and it['id'] in inspected]
         mine = [f for f in findings if f['class'] == cls]
         hits = [f for f in mine if 'item' in f['match']]
@@ -233,15 +244,18 @@ def build(run_dir: str, detections: dict, cfg: dict) -> tuple[list[dict], dict]:
     hull = HullGeometry(**spec['hull'])
     recs = {r['frame']: r for r in (json.loads(l) for l in open(os.path.join(run_dir, 'frames.jsonl')))
             if r['camera'] == cfg['survey']['camera']}
+    m = cfg['stations']['window_margin_m'] + cfg['stations']['glare_margin_m']
+    windows = [[st['box'][0] - m, st['box'][1] - m, st['box'][2] + m, st['box'][3] + m] for st in anode_stations(spec['config'])]
+    classes = set(map_classes(cfg))
     views = []
     for frame, dets in detections.items():
         rec = recs.get(frame)
         if rec is None:
             continue
         for d in dets:
-            if d['score'] >= cfg['perception']['score_threshold']:
+            if d['score'] >= cfg['perception']['score_threshold'] and d['class'] in classes:
                 v = place(d, rec, hull, cfg)
-                if v is not None:
+                if v is not None and not any(w[0] <= v['centre'][0] <= w[2] and w[1] <= v['centre'][1] <= w[3] for w in windows):
                     views.append(v)
     findings = confirm(fuse(views, cfg), [r for r in recs.values() if r.get('signal', True)], hull, cfg)
     with open(os.path.join(run_dir, 'coverage.json')) as f:

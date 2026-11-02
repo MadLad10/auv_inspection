@@ -324,5 +324,6 @@ def cell_cnr(s1_rate: np.ndarray, bg_rate: np.ndarray, t: float, gain: float, gs
 def background_rate(s1_rate: np.ndarray, back_rate: np.ndarray, ranges: np.ndarray, water: dict, cfg: dict) -> np.ndarray:
     """Electrons/s of the reference background: its direct and forward-scattered light, plus backscatter."""
     _, b, _ = iops(water)
-    rho = np.asarray(cfg['coverage']['reference_albedo'], float)
+    ref = cfg['coverage']['reference_albedo']
+    rho = np.asarray(cfg['appearance']['paint_rgb'] if ref == 'paint' else ref, float)
     return rho * s1_rate * np.exp(b * np.nan_to_num(ranges, posinf=0.0)[..., None]) + back_rate

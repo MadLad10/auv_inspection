@@ -18,7 +18,7 @@ import numpy as np
 from PIL import Image
 
 from . import config as config_mod
-from .hull import HullGeometry
+from .hull import HullGeometry, anode_stations
 from .rng import stream
 from .texture import blob_mask, crack_mask, disc, erode, polygon_mask, value_noise
 
@@ -181,8 +181,8 @@ class _Builder:
         a = self.cfg['anodes']
         rng = stream(self.seed, 'anodes')
         L, T, H = a['size_m']
-        xs = np.arange(a['spacing_m'] / 2, self.hull.length - L / 2, a['spacing_m'])
-        for x in xs:
+        for st in anode_stations(self.cfg):
+            x = st['x']
             u = rng.uniform()
             status = 'missing' if u < a['p_missing'] else 'depleted' if u < a['p_missing'] + a['p_depleted'] else 'intact'
             if status == 'missing':

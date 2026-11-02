@@ -14,13 +14,17 @@ from .scenario import Scenario, generate
 
 def _generate(a):
     cfg = config_mod.load(a.config)
+    drawn = None
+    if a.vary_world:
+        from .benchmark import world
+        cfg, drawn = world(a.seed, cfg, {})
     scn = generate(a.seed, cfg)
     digest = scn.save(a.out)
     counts: dict[str, int] = {}
     for it in scn.items:
         k = it['class'] if it['class'] != 'anode' else f'anode_{it["status"]}'
         counts[k] = counts.get(k, 0) + 1
-    print(json.dumps({'out': a.out, 'digest': digest, 'items': counts}, indent=1))
+    print(json.dumps({'out': a.out, 'digest': digest, 'items': counts, **({'world': drawn} if drawn else {})}, indent=1))
 
 
 def _survey(a):
@@ -67,16 +71,75 @@ def _evaluate(a):
     print(json.dumps(m, indent=1))
 
 
+def _train_stations(a):
+    from .dataset import split_of
+    from .stations import train
+    cfg = config_mod.load(a.config)
+    for run in a.run:
+        with open(os.path.join(os.path.dirname(os.path.normpath(run)), 'scenario.json')) as f:
+            seed = json.load(f)['seed']
+        if split_of(seed, cfg['perception']['splits']) != 'train':
+            raise ValueError(f'{run}: scenario seed {seed} is not in the training split')
+    model = train(a.run, cfg)
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    with open(a.out, 'w') as f:
+        json.dump(model, f, indent=1)
+    print(json.dumps({'out': a.out, 'views_by_paint': {k: v['views'] for k, v in model['paints'].items()},
+                      'hulls': len(model['trained_on'])}, indent=1))
+
+
+def _stations(a):
+    from .stations import check, load_model
+    cfg = config_mod.load(a.config)
+    out = {}
+    for run in a.run:
+        results, metrics = check(run, cfg, load_model(cfg, a.model))
+        out[run] = {'stations': {r['id']: r['status'] for r in results}, 'referee': {k: v for k, v in metrics.items() if k != 'confusion'}}
+    if a.out:
+        with open(a.out, 'w') as f:
+            json.dump(out, f, indent=1)
+    print(json.dumps(out, indent=1))
+
+
+def _benchmark(a):
+    from . import benchmark
+    cfg = config_mod.load(a.config)
+    if a.suite not in cfg['benchmark']['suites']:
+        raise ValueError(f'no benchmark suite {a.suite!r}; suites: {sorted(cfg["benchmark"]["suites"])}')
+    if a.action == 'run':
+        seeds = cfg['benchmark']['suites'][a.suite]['seeds']
+        stray = [s for s in a.seed or [] if s not in seeds]
+        if stray:
+            raise ValueError(f'seeds {stray} are not in suite {a.suite!r} ({seeds})')
+        for seed in a.seed or seeds:
+            r = benchmark.run_hull(seed, a.suite, a.out, cfg, rescore=a.rescore)
+            print(json.dumps({'seed': seed, 'world': r['world'], 'coverage': r['coverage'],
+                              'recall_confirmed': f"{r['map']['confirmed']['found']}/{r['map']['confirmed']['required']}",
+                              'stations': f"{r['stations']['correct']}/{r['stations']['inspected']}"}))
+        return 0
+    summary = benchmark.summarize(a.out, a.suite, cfg)
+    with open(os.path.join(a.out, 'benchmark.json'), 'w') as f:
+        json.dump(summary, f, indent=1)
+    if a.action == 'score':
+        print(json.dumps({k: summary[k] for k in ('suite', 'hulls', 'missing', 'values')}, indent=1))
+        return 0
+    fails = benchmark.gate(summary, cfg)
+    print(json.dumps({'suite': a.suite, 'passed': not fails, 'failures': fails}, indent=1))
+    return 1 if fails else 0
+
+
 def _report(a):
     from .report import write
+    from .stations import load_model, window_masks
     cfg = config_mod.load(a.config)
+    model = load_model(cfg, a.stations_model)
     if a.detections:
         with open(a.detections) as f:
             det = json.load(f)
     else:
         from .baseline import run_frames
-        det = run_frames(a.run, cfg)
-    print(json.dumps(write(a.run, det, a.out, cfg), indent=1))
+        det = run_frames(a.run, cfg, window_masks(a.run, cfg))
+    print(json.dumps(write(a.run, det, a.out, cfg, model), indent=1))
 
 
 def _evolve(a):
@@ -100,7 +163,7 @@ def _change(a):
     with open(os.path.join(a.out, 'metrics.json'), 'w') as f:
         json.dump(metrics, f, indent=1)
     counts: dict[str, int] = {}
-    for c in changes:
+    for c in changes['findings'] + changes['stations']:
         counts[c['change']] = counts.get(c['change'], 0) + 1
     short = {t: {k: v for k, v in m.items() if k != 'confusion'} for t, m in metrics.items()}
     print(json.dumps({'changes': counts, 'referee': short, 'out': a.out}, indent=1))
@@ -125,6 +188,7 @@ def main(argv=None):
     g.add_argument('--seed', type=int, required=True)
     g.add_argument('--out', required=True)
     g.add_argument('--config', help='YAML file merged over the defaults')
+    g.add_argument('--vary-world', action='store_true', help="draw the water and paint from the seed, as the benchmark's hulls do")
     g.set_defaults(fn=_generate)
     s = sub.add_parser('survey', help='run the planned survey over a scenario')
     s.add_argument('--scenario', required=True)
@@ -161,8 +225,20 @@ def main(argv=None):
     r.add_argument('--run', required=True, help='a survey or mission directory inside its scenario directory')
     r.add_argument('--out', required=True)
     r.add_argument('--detections', help='detections JSON keyed by frame name (default: the classical baseline)')
+    r.add_argument('--stations-model', help='anode station model JSON (default: the packaged model)')
     r.add_argument('--config', help='YAML run settings merged over the defaults')
     r.set_defaults(fn=_report)
+    ts = sub.add_parser('train-stations', help='fit the anode station classifier on runs of training hulls')
+    ts.add_argument('--run', action='append', required=True, help='a survey or mission directory of a training-split hull (repeatable)')
+    ts.add_argument('--out', required=True, help='model JSON')
+    ts.add_argument('--config', help='YAML run settings merged over the defaults')
+    ts.set_defaults(fn=_train_stations)
+    sc = sub.add_parser('stations', help='check the anode stations of recorded runs and score them')
+    sc.add_argument('--run', action='append', required=True, help='a survey or mission directory (repeatable)')
+    sc.add_argument('--model', help='station model JSON (default: the packaged model)')
+    sc.add_argument('--out', help='results JSON')
+    sc.add_argument('--config', help='YAML run settings merged over the defaults')
+    sc.set_defaults(fn=_stations)
     ev = sub.add_parser('evolve', help='the same hull some months later: grown, new and aged defects')
     ev.add_argument('--scenario', required=True)
     ev.add_argument('--months', type=float, required=True)
@@ -175,6 +251,14 @@ def main(argv=None):
     ch.add_argument('--out', required=True)
     ch.add_argument('--config', help='YAML run settings merged over the defaults')
     ch.set_defaults(fn=_change)
+    bm = sub.add_parser('benchmark', help='fly and score a suite of hulls (run), summarise it (score), or check it against its gate (gate)')
+    bm.add_argument('action', choices=['run', 'score', 'gate'])
+    bm.add_argument('--suite', required=True, help='a suite in benchmark.suites (ci, dev, test)')
+    bm.add_argument('--out', required=True, help='directory of the suite\'s hulls and results')
+    bm.add_argument('--seed', type=int, action='append', help='run only these hulls of the suite (repeatable)')
+    bm.add_argument('--rescore', action='store_true', help='keep the flown missions, redo detection, map, stations and report')
+    bm.add_argument('--config', help='YAML run settings merged over the defaults')
+    bm.set_defaults(fn=_benchmark)
     v = sub.add_parser('preview', help='render the rig at one pose, or the annotated texture')
     v.add_argument('--scenario', required=True)
     v.add_argument('--out', required=True)
@@ -186,11 +270,11 @@ def main(argv=None):
     v.set_defaults(fn=_preview)
     a = p.parse_args(argv)
     try:
-        a.fn(a)
+        code = a.fn(a)
     except (config_mod.ConfigError, FileNotFoundError, ValueError) as e:
         print(f'error: {e}', file=sys.stderr)
         return 2
-    return 0
+    return code or 0
 
 
 if __name__ == '__main__':
