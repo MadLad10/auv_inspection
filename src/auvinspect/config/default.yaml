@@ -1,0 +1,228 @@
+# auvinspect default configuration. Units: metres, degrees, RGB in 0..1 unless stated.
+# World frame: x along the ship (bow towards +x), z up, z = 0 at the waterline. The hull's port side
+# is the plane y = hull.offset_y_m; the vehicle works at y < offset_y_m, looking towards +y.
+schema_version: 2
+
+hull:
+  length_m: 20.0
+  side_depth_m: 3.0          # flat side, waterline down to the start of the bilge turn
+  bilge_radius_m: 1.0
+  bottom_halfwidth_m: 3.0    # flat bottom from the end of the bilge turn to the centreline
+  offset_y_m: 3.0
+  texture_mm_per_px: 4.0
+  mesh_cells: [160, 64]      # along the length, along the girth (render mesh only; GT is analytic)
+  inspect_girth_m: [0.2, 4.45]   # girth band the survey must cover (0 = waterline)
+  inspect_margin_m: 0.4      # keep defects this far from the hull ends
+
+appearance:
+  paint_rgb: [0.40, 0.15, 0.11]    # antifouling red-brown
+  paint_variation: 0.08      # low-frequency shading amplitude
+  paint_variation_scale_m: 1.5
+  grain: 0.035               # high-frequency grain amplitude
+  grain_scale_m: 0.02
+  plate_size_m: [2.4, 1.5]   # along the length, along the girth (vertical seams stagger per strake)
+  seam_width_mm: 12
+  seam_shade: 0.72           # multiplies paint brightness on weld seams
+  slime_rgb: [0.30, 0.33, 0.19]
+  slime_strength: [0.0, 0.35]      # per-scenario film strength range (not a defect)
+  slime_scale_m: 2.0
+  sea_chests: 1              # gratings: benign distractors, never defects
+  sea_chest_size_m: [0.9, 0.6]
+  sea_chest_bar_spacing_m: 0.08
+  sea_chest_opening_shade: 0.12   # brightness of the dark opening behind the bars
+  sea_chest_min_girth_m: 0.3
+
+defects:
+  min_gap_m: 0.06
+  max_tries: 200
+  corrosion:      {count: [3, 8], area_m2: [0.003, 0.20], rgb: [0.55, 0.29, 0.11], mottle: 0.25, scale_m: 0.03}
+  coating_damage: {count: [2, 6], area_m2: [0.01, 0.30], rgb: [0.63, 0.63, 0.59], edge_shade: 0.6, edge_px: 2}
+  biofouling:     {count: [2, 6], area_m2: [0.05, 0.80], rgb: [0.24, 0.29, 0.15], mottle: 0.3, scale_m: 0.05,
+                   barnacle_rgb: [0.86, 0.84, 0.78], barnacle_density_per_m2: 400, barnacle_radius_mm: [6, 14]}
+  crack:          {count: [1, 4], length_m: [0.08, 0.40], width_mm: [3, 6], rgb: [0.07, 0.05, 0.04],
+                   step_m: 0.01, turn_std_deg: 12}
+  blob_irregularity: 0.35    # noise amplitude on blob outlines (corrosion, biofouling)
+  polygon_vertices: [9, 16]  # coating damage outline
+  aspect: [0.45, 1.0]        # minor/major axis ratio for blobs and polygons
+
+anodes:
+  spacing_m: 3.0
+  size_m: [0.30, 0.05, 0.15]   # length (x), thickness (normal), height (girth)
+  girth_m: 2.6                 # mounting girth position; must be on the flat side
+  p_missing: 0.15
+  p_depleted: 0.25
+  depleted_scale: 0.6          # thickness and height scale of a depleted anode
+  rgb: [0.70, 0.72, 0.74]
+  depleted_rgb: [0.43, 0.44, 0.42]
+  footprint_rgb: [0.52, 0.30, 0.24]   # unfouled paint left by a missing anode
+  bolt_rgb: [0.12, 0.11, 0.10]
+  bolt_radius_mm: 12
+
+water:                         # the water's inherent optical properties, per colour channel (R, G, B)
+  density_kg_m3: 1025.0        # seawater
+  gravity_m_s2: 9.81
+  absorption_per_m: [0.35, 0.08, 0.12]     # a: water itself (red), dissolved matter and particles (blue)
+  scattering_per_m: [0.38, 0.40, 0.42]     # b: suspended particles, nearly flat in wavelength
+  phase_g: 0.924               # Henyey-Greenstein asymmetry; backscatter ratio b_b / b ~ 0.018 (Petzold-like)
+  visibility_constant: 4.8     # horizontal visibility of a black target = 4.8 / c (Zaneveld and Pegau 2003)
+  daylight:                    # ambient light from the surface (zero: night, or lamps only)
+    surface_irradiance_w_m2: [0.0, 0.0, 0.0]
+    diffuse_attenuation_per_m: [0.45, 0.12, 0.16]   # K_d
+    upwelling_ratio: 0.02      # irradiance reflectance of the water column below
+  seabed_clearance_m: 3.0      # seabed this far below the keel (bilge end)
+  seabed_rgb: [0.52, 0.48, 0.38]   # seabed albedo
+  seabed_texture_m: 4.0        # one seabed texture tile
+  seabed_texture_px: 256
+  seabed_variation: [0.15, 0.08]     # coarse and fine shading amplitudes
+  seabed_noise_px: [24, 3]           # coarse and fine noise feature sizes (texture pixels); tileable
+
+cameras:
+  width: 640
+  height: 480
+  hfov_deg: 80.0
+  znear_m: 0.05
+  zfar_m: 40.0
+  sensor:
+    pixel_pitch_um: 5.6
+    f_number: 2.8
+    quantum_efficiency: [0.45, 0.60, 0.50]
+    wavelength_nm: [620.0, 530.0, 465.0]   # centre of each colour band (photon energy)
+    full_well_e: 15000
+    read_noise_e: 6.0
+    bits: 8
+    exposure_s: [0.0001, 0.008]  # shortest and longest exposure; the longest keeps motion blur under a pixel
+    max_gain: 16.0
+    vignetting_exponent: 4.0   # relative illumination cos^v(field angle); 4 = thin lens
+    auto_exposure: {target: 0.45, metering_fraction: 0.5}   # target: share of the full scale
+  lamps:                       # on the inspection camera's tilt unit, aimed along its view
+    offsets_m: [[0.25, 0.0, 0.0], [-0.25, 0.0, 0.0]]   # camera frame (x right, y up, z back)
+    power_w: 10.0              # optical power per lamp (a ~3000 lm white LED)
+    spectrum: [0.30, 0.40, 0.30]   # share of that power in the R, G, B bands
+    half_power_angle_deg: 55.0 # beam I(theta) = I0 cos^m(theta): a 110 deg wide flood lamp
+  rig:   # offset in the vehicle frame (x forward, y port, z up) and viewing direction
+    forward:   {offset: [0.30, 0.00, 0.00], look: forward}
+    port:      {offset: [0.00, 0.18, 0.00], look: port}
+    starboard: {offset: [0.00, -0.18, 0.00], look: starboard}
+    down:      {offset: [0.00, 0.00, -0.12], look: down}
+
+optics:                        # numerical settings of the image-formation model
+  backscatter_samples: 64      # ranges per ray (geometric spacing)
+  path_start_m: 0.02
+  path_max_m: 30.0             # backscatter beyond this range is negligible (e^{-c r} / r^2)
+  backscatter_grid_px: 16      # backscatter is integrated on every n-th ray and interpolated (error < 0.1%)
+  forward_kernel_radius_px: 48 # forward-scatter halo kept within this radius; the rest becomes a uniform veil
+  forward_cone_deg: 10.0       # scattered lamp light within this angle stays in the beam
+
+survey:
+  camera: port                 # inspection camera (on a tilt unit: it faces the local hull normal)
+  record_cameras: [port]
+  standoff_m: 1.5
+  overlap_along: 0.6
+  overlap_across: 0.3
+  end_margin_m: 0.5            # start and end each lane this far beyond the hull ends
+  band_margin_m: 0.05          # lane strips reach this far beyond the girth band's (and each revisit's) edges
+  plan_resolution_m: 0.01      # girth step used to place lanes against the coverage limits
+
+coverage:
+  cell_m: 0.02
+  max_range_m: 3.0
+  max_incidence_deg: 50.0
+  max_gsd_mm: 6.0              # worst-direction size of one pixel on the hull
+  reference_albedo: [0.40, 0.15, 0.11]   # the background a defect must stand out from (hull paint)
+  reflectance_step: 0.05       # the faint defect to be seen: this albedo change on that background
+  cnr_channel: 1               # colour channel the contrast-to-noise ratio is judged in
+  min_cell_cnr: 5.0            # Rose criterion for that step over one cell
+  max_blur_px: 1.0             # motion blur during the exposure
+  defect_seen_fraction: 0.8    # a defect counts as inspected when this share of its area is covered
+
+# ---------------------------------------------------------------- vehicle in the loop (run settings)
+vehicle:
+  model:                       # rigid body in water (dynamics.py); body origin = centre of buoyancy
+    size_m: [0.5, 0.3, 0.2]    # box: length, width, height (displaced volume 0.03 m^3)
+    mass_kg: 30.45             # trimmed for seawater: about 3 N positively buoyant
+    centre_of_gravity_m: [0.0, 0.0, -0.04]   # below the centre of buoyancy: righting moment
+    damping_linear: [10.0, 15.0, 15.0, 2.0, 3.0, 3.0]   # N per m/s and N m per rad/s (u v w p q r)
+    drag_coefficient: 1.0      # quadratic drag of the box faces (strip theory)
+    # name: [x, y, z, dir_x, dir_y, dir_z] in the body frame (direction of positive thrust)
+    thrusters:
+      surge_left:  [-0.25,  0.17,  0.00, 1, 0, 0]
+      surge_right: [-0.25, -0.17,  0.00, 1, 0, 0]
+      heave_front: [ 0.18,  0.00,  0.12, 0, 0, 1]
+      heave_back:  [-0.18,  0.00,  0.12, 0, 0, 1]
+      sway_front:  [ 0.18,  0.00, -0.12, 0, 1, 0]
+      sway_back:   [-0.18,  0.00, -0.12, 0, 1, 0]
+    max_thrust_n: 40.0
+    thruster_tau_s: 0.1        # first-order thrust lag
+    thruster_diameter_m: 0.07  # power: ideal actuator disk T^1.5 / sqrt(2 rho A), over the efficiency
+    thruster_efficiency: 0.5
+    hotel_power_w: 20.0
+    battery_wh: 150.0
+  contact: {stiffness_n_per_m: 4000.0, damping_n_per_mps: 400.0, friction: 0.3, slip_speed_mps: 0.01}
+  current_mps: [0.0, 0.0, 0.0] # uniform water current (world frame)
+  integration_dt_s: 0.01       # Runge-Kutta step
+  control_dt_s: 0.05           # control and sensor tick
+  tilt_rate_deg_s: 60.0        # camera tilt unit slew rate
+  start_lead_m: 1.0            # the vehicle starts this far before the first lane, on the lane's line
+  speed_mps: 0.25              # along a lane
+  transit_speed_mps: 0.35      # between lanes and to revisits
+  lead_m: 0.4                  # the guidance reference runs at most this far ahead of the vehicle
+  path_step_m: 0.05            # sampling of paths defined in hull coordinates
+  arrive_tol_m: 0.15           # a leg ends when the vehicle is this close to its end point
+  edge_search_m: 2.0           # a lane past a hull end may continue this far until the sounder loses the hull
+  leg_timeout_factor: 4.0      # a leg is abandoned after this multiple of its nominal duration
+  control:                     # world-frame PID on the estimated position; PD on yaw and pitch
+    kp: [12.0, 12.0, 15.0]     # N/m
+    kd: [28.0, 28.0, 28.0]     # N per m/s
+    ki: [1.5, 1.5, 4.0]        # N per m s
+    i_limit_n: [10.0, 10.0, 15.0]
+    drag_feedforward: 1.0      # share of the vehicle model's drag (at the reference velocity) fed forward
+    kp_yaw: 4.0                # N m/rad
+    kd_yaw: 2.0                # N m per rad/s
+    kp_pitch: 6.0
+    kd_pitch: 1.5
+    tilt_compensates_roll: true    # the camera tilt unit cancels the measured vehicle roll
+
+navigation:
+  ekf_overrides: {}            # merged over auv_navigation_fusion's navigation.yaml
+  initial_fix_std: {pos_m: 0.05, yaw_deg: 1.0}   # error of the vehicle's initial fix; also the EKF prior
+  standoff_update: true        # fuse the standoff sounder's range to the hull into the EKF
+  standoff_gate: 6.63          # chi-square gate for that update (1 dof, 99%)
+  hull_end_update: true        # along-ship fix where the sounder's echo starts or stops at a hull end
+  hull_end_std_m: 0.03         # uncertainty of that edge position (beam footprint, hull end geometry)
+  hull_end_gate: 6.63
+  jacobian_step: 0.001         # finite-difference step for the standoff update (m, rad)
+
+sensors:
+  imu: {rate_hz: 20.0, gyro_noise: 0.002, gyro_bias_walk: 0.00002, accel_noise: 0.03, attitude_noise_deg: 0.3}
+  dvl: {rate_hz: 5.0, beam_angle_deg: 30.0, offset_m: [0.0, 0.0, -0.1], min_range_m: 0.3, max_range_m: 30.0,
+        vel_noise_mps: 0.01, scale_error: 0.002}
+  compass: {rate_hz: 10.0, noise_deg: 1.5}
+  pressure: {rate_hz: 10.0, noise_m: 0.005}
+  standoff:                    # single-beam sounder on the inspection camera's tilt unit, along its optical axis
+    rate_hz: 5.0
+    noise_m: 0.01
+    max_range_m: 6.0
+  water_quality: {rate_hz: 1.0, noise_frac: 0.03}   # attenuation and scattering meters, per colour channel
+  thrusters: {rate_hz: 10.0}
+  battery: {rate_hz: 1.0}
+
+onboard:
+  assumed_phase_g: 0.924       # the scattering phase function is not measured; this is the onboard's prior
+  assumed_daylight:            # nor is daylight (zero: night, or lamps only)
+    surface_irradiance_w_m2: [0.0, 0.0, 0.0]
+    diffuse_attenuation_per_m: [0.45, 0.12, 0.16]
+    upwelling_ratio: 0.02
+  dead_frame_std_dn: 0.5       # a frame whose values vary less than this has no sensor signal (a dark
+                               # scene still shows shot and read noise)
+  claim_pixel_stride: 2        # pixel step when projecting a frame onto the hull model (keep below cell size)
+  claim_max_std_m: [0.3, 0.05] # 1-sigma position uncertainty along the ship / along the girth above which
+                               # a frame is not claimed (lane end margin and lane overlap absorb less)
+  replan_rounds: 2             # revisit rounds for holes in the claimed coverage
+  hole_merge_m: 0.3            # holes closer than this are revisited together
+  revisit_margin_m: 0.3        # revisit lanes extend this far beyond a hole along the ship
+
+mission:
+  max_seconds: 3600.0          # simulated time limit
+
+# Fault schedule: [{type, t_start, duration (null = permanent), params}]; types in faults.py.
+faults: []

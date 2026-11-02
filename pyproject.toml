@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auvinspect"
+version = "0.2.0"
+description = "Simulation-tested underwater hull inspection: scenarios with exact defect ground truth, survey planning, vehicle-in-the-loop missions, coverage scoring."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Yaad Kamrul Bari", email = "yaadbari21@gmail.com"}]
+dependencies = [
+    "mujoco>=3.3,<4",
+    "numpy>=1.24,<2",
+    "PyYAML>=6,<7",
+    "Pillow>=10,<12",
+    "auv-navigation-fusion>=0.1,<0.2",
+]
+
+# The sibling package is not on PyPI: install it from its locally built wheel, never by name from an
+# index (a same-named index package would be someone else's code).
+[tool.uv.sources]
+auv-navigation-fusion = { path = "../auv_navigation_fusion/dist/auv_navigation_fusion-0.1.0-py3-none-any.whl" }
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4,<8"]
+
+[project.scripts]
+auvinspect = "auvinspect.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+auvinspect = ["config/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
