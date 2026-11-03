@@ -1,5 +1,6 @@
 """The benchmark: per-hull worlds, pooled scores with hull-resampling intervals, the gate."""
 import copy
+import json
 
 import numpy as np
 import pytest
@@ -69,3 +70,15 @@ def test_scores_pool_over_hulls_and_the_gate_reads_them(tmp_path):
     assert benchmark.gate(summary, cfg) == ['hull s4 has no result']
     cfg['benchmark']['suites']['ci']['gate']['min']['station_accuracy'] = 0.99
     assert benchmark.gate({**summary, 'missing': []}, cfg) == [f"station_accuracy = {v['station_accuracy']['value']} below 0.99"]
+
+
+def test_reused_missions_must_be_this_suites_hulls(tmp_path):
+    cfg = config.load()
+    other = tmp_path / 'other'
+    with pytest.raises(ValueError, match='no flown mission'):
+        benchmark.run_hull(401, 'ci', str(tmp_path / 'out'), cfg, missions=str(other))
+    (other / 's401' / 'mission').mkdir(parents=True)
+    (other / 's401' / 'mission' / 'coverage.json').write_text('{}')
+    (other / 's401' / 'scenario.json').write_text(json.dumps({'digest': 'not this hull'}))
+    with pytest.raises(ValueError, match='not this hull of the suite'):
+        benchmark.run_hull(401, 'ci', str(tmp_path / 'out'), cfg, missions=str(other))

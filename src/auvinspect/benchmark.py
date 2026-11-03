@@ -55,10 +55,13 @@ def _settings_digest(cfg: dict) -> str:
 
 
 def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict | None = None, rescore: bool = False,
-             library=None) -> dict:
+             library=None, seg: dict | None = None, missions: str | None = None) -> dict:
     """One hull of a suite, end to end. Its result is kept in <out_root>/s<seed>/result.json and reused
     when present; with rescore, the flown mission is kept and detection, map, stations and report are
-    redone (after a change to them). With a patch library (patches.Library), the hull carries real defects."""
+    redone (after a change to them). With a patch library (patches.Library), the hull carries real defects.
+    With seg (segmenter.load_for_benchmark), the deep segmenter replaces the classical detector. With
+    missions (another run of the same suite), its flown missions are reused, so detectors are compared
+    on the same flights."""
     from .mission import run as fly
     d = os.path.join(out_root, f's{seed}')
     path = os.path.join(d, 'result.json')
@@ -66,18 +69,27 @@ def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict |
         with open(path) as f:
             return json.load(f)
     wcfg, drawn = world(seed, cfg, cfg['benchmark']['suites'][suite_name])
-    mdir = os.path.join(d, 'mission')
+    src = os.path.join(missions, f's{seed}') if missions else d
+    mdir = os.path.join(src, 'mission')
     if os.path.exists(os.path.join(mdir, 'coverage.json')):
-        with open(os.path.join(d, 'scenario.json')) as f:
+        with open(os.path.join(src, 'scenario.json')) as f:
             digest = json.load(f)['digest']
         if digest != generate(seed, wcfg, library).digest():
-            raise ValueError(f'{d}: the saved scenario is not this hull of the suite; remove it to fly again')
+            raise ValueError(f'{src}: the saved scenario is not this hull of the suite; remove it to fly again')
+    elif missions:
+        raise ValueError(f'{src}: no flown mission to reuse')
     else:
         scn = generate(seed, wcfg, library)
         digest = scn.save(d)
         fly(scn, mdir)
-    det_model = detector.load_model(wcfg)
-    det = baseline.run_frames(mdir, wcfg, stations.window_masks(mdir, wcfg), det_model)
+    os.makedirs(d, exist_ok=True)
+    if seg is not None:
+        from . import segmenter
+        det_model = None
+        det = segmenter.run_frames(seg['net'], mdir, {**wcfg, 'segmenter': seg['cfg']['segmenter']})
+    else:
+        det_model = detector.load_model(wcfg)
+        det = baseline.run_frames(mdir, wcfg, stations.window_masks(mdir, wcfg), det_model)
     model = model or stations.load_model(wcfg)
     report.write(mdir, det, os.path.join(d, 'report'), wcfg, model)
     with open(os.path.join(mdir, 'coverage.json')) as f:
@@ -100,7 +112,8 @@ def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict |
               'stations': {k: st[k] for k in ('stations', 'inspected', 'correct', 'unclear', 'wrong', 'per_status')},
               'versions': {'auvinspect': __version__, 'run_settings_sha256': _settings_digest(cfg),
                            'station_model_sha256': hashlib.sha256(json.dumps(model, sort_keys=True).encode()).hexdigest(),
-                           'detector_model_sha256': (hashlib.sha256(json.dumps(det_model, sort_keys=True).encode()).hexdigest()
+                           'detector_model_sha256': (f'segmenter:{seg["sha256"]}' if seg is not None else
+                                                     hashlib.sha256(json.dumps(det_model, sort_keys=True).encode()).hexdigest()
                                                      if det_model else 'rules')}}
     with open(path + '.tmp', 'w') as f:
         json.dump(result, f, indent=1)

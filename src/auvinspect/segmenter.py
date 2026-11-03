@@ -208,6 +208,12 @@ def load(path: str, cfg: dict):
     return net, meta, run_cfg
 
 
+def load_for_benchmark(path: str, cfg: dict) -> dict:
+    """A model file loaded for benchmark.run_hull: the network, its record, its input settings and its digest."""
+    net, meta, run_cfg = load(path, cfg)
+    return {'net': net, 'meta': meta, 'cfg': run_cfg, 'sha256': _sha256(path)}
+
+
 # ---------------------------------------------------------------------------------------------- detection
 def _probabilities(net, imgs: np.ndarray, cfg: dict) -> np.ndarray:
     torch = _torch()

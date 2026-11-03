@@ -5,13 +5,14 @@ exact ground truth: every defect's position, outline and area is known, and ever
 knows which defect it shows. The pipeline can therefore be scored by an independent referee, not
 by its own claims.
 
-**Status:** milestones 1, 2 and 4 of 6 done, on a physically based environment: Fossen
+**Status:** milestones 1 to 4 of 6 done, on a physically based environment: Fossen
 6-DOF vehicle dynamics with added mass and contact, Jaffe-McGlamery underwater image formation with
 a photon-counting camera, and a contrast-to-noise coverage criterion. Milestone 3 (perception) has
 its dataset exporter, perception referee, a classical baseline and a learned region classifier
 (numpy, no downloads) trained on hulls of every paint. It imports the real LIACi inspection images
 for scoring and training, paints LIACi's real defects onto simulated hulls, and has a deep
-segmenter (PyTorch, the `learn` extra) with an ImageNet-pretrained encoder. Milestone 4 has the
+segmenter (PyTorch, the `learn` extra) with an ImageNet-pretrained encoder that finds 70% of real
+defects on the frozen test hulls, against 16% for the classical detector. Milestone 4 has the
 defect map, anode stations checked against the hull plan, the inspection report with review
 statuses, the hull months later (grown and new defects, aged anodes) and change detection between
 two surveys. Milestone 5 has the benchmark and CI that gates on it.
@@ -264,9 +265,9 @@ each, seed 0):
 | Simulated, real defects | 0.03 | 0.35 | **0.51** |
 | LIACi + simulated, real defects | **0.29** | 0.38 | 0.48 |
 
-The simulated datasets are the 14 hulls of the perception dataset (7 train, 2 val, 5 test), red-brown
-paint, kinematic survey frames. Its procedural and real-defect versions share seeds, so hulls,
-anodes and cracks are the same.
+The simulated datasets are the 14 hulls of the perception dataset (7 train, 2 val, 5 test),
+red-brown paint, kinematic survey frames. Its procedural and real-defect versions share seeds, so
+hulls, anodes and cracks are the same.
 
 On LIACi's test images, the LIACi model scores per class:
 
@@ -290,22 +291,15 @@ What this shows:
   LIACi's score (0.29) and nearly keeps the simulator's (0.48).
 
 In the full pipeline, the segmenter replaces the classical detector; the map, multi-view
-confirmation and referee are unchanged. On the `ci` suite's two 8 m hulls (one red-brown, one
-black; 29 findable defects):
+confirmation and referee are unchanged. The model used there, `seg_all`, is trained on LIACi and
+on 17 training hulls with real defects in all three paints (7 from the table's dataset, 10 in
+varied water and paint), and validated on LIACi and 4 validation hulls. It scores 0.29 on LIACi,
+0.40 on procedural and 0.55 on real-defect hulls (the table's measure). Its results on the frozen
+test suite are under [Benchmark](#benchmark).
 
-| Confirmed findings: recall / precision / false per hull | Procedural defects | Real defects |
-|---|---|---|
-| Classical baseline with the region classifier | 0.83 / 0.89 / 1.5 | 0.21 / 0.50 / 2.5 |
-| Segmenter, simulated procedural defects | **0.93 / 0.93 / 1.0** | 0.38 / 0.31 / 11.0 |
-| Segmenter, simulated real defects | 0.45 / 0.39 / 8.5 | **0.62** / 0.58 / 6.0 |
-| Segmenter, LIACi + simulated real defects | 0.45 / 0.57 / 5.0 | 0.55 / **0.62** / 4.5 |
-
-Two hulls give no interval, and the segmenters never saw black paint or mission frames. The map's
-settings were tuned with the classical detector. Each detector does best on the defects it was
-trained on. Real defects take the classical pipeline from 0.83 to 0.21 recall, a gap the procedural
-hulls hid. The `ci` gate keeps procedural defects and the classical detector, because LIACi-derived
-hulls and models cannot go into CI. Trained models stay in `runs/models/`: those trained on LIACi
-or on hulls with real defects are adaptations of LIACi (CC BY-NC-SA 4.0).
+Trained models stay in `runs/models/`. Those trained on LIACi or on hulls with real defects are
+adaptations of LIACi (CC BY-NC-SA 4.0), so the `ci` gate keeps procedural defects and the
+classical detector.
 
 ### Defect map, anode stations and report (milestone 4)
 
@@ -454,6 +448,41 @@ every paint and almost no false findings. It finds fewer cracks than the rules, 
 every dark line: it learned from 42 crack regions only, and a crack 3 to 6 mm wide at 4 mm per
 pixel stands out less from the paint's grain than the grain does from itself (see
 [Limitations](#limitations)).
+
+#### Real defects and the deep segmenter (milestone 3)
+
+`benchmark run --patches` paints the suite's hulls with real LIACi defects; `--segmenter` detects
+with the deep segmenter; `--missions` reuses another run's flown missions, so detectors are
+compared on the same flights. The test suite, flown again with real defects (same hulls, water,
+paint, anodes and cracks), scored once with each detector. Confirmed findings, 95% intervals from
+resampling hulls:
+
+| Test suite, 8 hulls | Classical (region classifier) | Deep segmenter (`seg_all`) |
+|---|---|---|
+| **Real defects:** defects found | 16% (12 to 20%) | **70% (65 to 76%)** |
+| Found by any finding | 34% (28 to 40%) | **93% (88 to 96%)** |
+| Precision | 48% (37 to 59%) | **68% (63 to 74%)** |
+| False confirmed findings per hull | 2.9 (2.0 to 4.0) | 4.8 (3.4 to 6.0) |
+| Corrosion, coating damage, fouling, cracks | 5/39, 6/35, 7/35, 2/13 | 30/39, 18/35, 30/35, 8/13 |
+| **Procedural defects:** defects found | **86% (79 to 92%)** | 66% (58 to 75%) |
+| Precision | **98% (96 to 100%)** | 68% (59 to 77%) |
+| False confirmed findings per hull | **0.25** | 4.9 |
+| Corrosion, coating damage, fouling, cracks | 37/39, 32/35, 34/35, 2/13 | 15/39, 25/35, 31/35, 10/13 |
+
+Coverage (100%) and stations (55 of 56) do not depend on the detector. Real defects take the
+classical detector from 86% to 16%: its candidate regions and region classifier learned the
+procedural defects' flat colours. The segmenter, trained on real defects (and never on these
+hulls), finds 70%. It also finds most cracks (8 to 10 of 13, against 2), which are procedural on
+both versions of the hulls. Its cost is false findings: about 5 confirmed per hull, mostly
+corrosion and fouling, on either version. The map's confirmation settings were tuned with the
+classical detector, on procedural defects. The dev suite (4 hulls) gave the same picture: 10%
+against 64% of real defects found.
+
+```bash
+.venv/bin/auvinspect benchmark run --suite test --patches runs/liaci_patches --out runs/bench/test_real
+.venv/bin/auvinspect benchmark run --suite test --patches runs/liaci_patches --segmenter runs/models/seg_all.pt \
+    --missions runs/bench/test_real --out runs/bench/test_real_seg
+```
 
 ## Physics
 
@@ -706,6 +735,7 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 - deep segmenter (a randomly initialised encoder in place of the ImageNet weights): regions to
   boxes and scores, the best validation epoch kept, the model reloading, the weights' digest
   enforced;
+- benchmark: reused missions refused when missing or of another hull;
 - missions: nominal (full coverage, no false claims, no contact, hull-end fixes on every lane);
   blackout and turbidity holes found and revisited; DVL dropout with and without hull-end fixes,
   never over-claimed; the faults the vehicle absorbs (stuck depth caught by the frozen-value check,
@@ -718,12 +748,13 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 1. ~~Scenarios, rendering, planning, coverage referee~~
 2. ~~Vehicle in the loop: dynamics, navigation drift (`auv_navigation_fusion`), camera faults;
    replanning when coverage holes appear.~~
-3. Perception: pretrained models (depth, segmentation, features) and a fine-tuned defect detector,
-   scored against the ground truth per class and per size. *Done so far: datasets, the perception
-   referee, a classical baseline, a learned region classifier (numpy) trained on hulls of every
-   paint, the import of the real LIACi images, real LIACi defects painted on simulated hulls, and
-   a deep segmenter (ImageNet-pretrained MobileNetV2) scored on real and simulated images and in
-   the hull pipeline.*
+3. ~~Perception: pretrained models (depth, segmentation, features) and a fine-tuned defect
+   detector, scored against the ground truth per class and per size.~~ Datasets and the
+   perception referee, a classical baseline, a learned region classifier (numpy) trained on hulls
+   of every paint, the real LIACi images, real LIACi defects painted on simulated hulls, and a
+   deep segmenter (ImageNet-pretrained MobileNetV2) scored on real images, simulated images and
+   the frozen test suite. No depth or feature model: the vehicle's range comes from its sounder
+   and DVL.
 4. ~~Defect map and report: defects placed on the hull with sizes and evidence frames; a second
    survey with grown defects for change detection; inspector review.~~ The map with multi-view
    confirmation and its referee, anode stations checked against the hull plan, the photomosaic
@@ -748,8 +779,11 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 - Cracks: a crack 3 to 6 mm wide at 4 mm per pixel shows a pixel contrast (median 3.5 to 8 median
   deviations of a valley filter) within the paint's grain (its 99.9th percentile 8 to 16), and the
   candidate regions' one-pixel opening removes most crack pixels. The region classifier finds 23% of
-  findable cracks on the test hulls. Filters integrating along a crack's length, or a close-up pass
-  at half the standoff over suspect areas, are the ways forward.
+  findable cracks on the test hulls; the deep segmenter finds 8 to 10 of 13.
+- The deep segmenter makes about five false confirmed findings per test hull, against 0.25 for the
+  classical detector on procedural defects. The map's confirmation settings were tuned with the
+  classical detector. Its weights, trained on LIACi-derived data, cannot go into the repository or
+  CI, so the CI gate does not cover it.
 - Light: single scattering for backscatter, a single-scattering halo scaled to the multiply
   scattered power for forward scatter, Lambertian surfaces, three colour bands rather than spectra,
   no shadows cast by anodes, no marine snow. Water is uniform.

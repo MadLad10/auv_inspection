@@ -164,12 +164,16 @@ def _benchmark(a):
         raise ValueError(f'no benchmark suite {a.suite!r}; suites: {sorted(cfg["benchmark"]["suites"])}')
     if a.action == 'run':
         library = _library(a.patches)
+        seg = None
+        if a.segmenter:
+            from .segmenter import load_for_benchmark
+            seg = load_for_benchmark(a.segmenter, cfg)
         seeds = cfg['benchmark']['suites'][a.suite]['seeds']
         stray = [s for s in a.seed or [] if s not in seeds]
         if stray:
             raise ValueError(f'seeds {stray} are not in suite {a.suite!r} ({seeds})')
         for seed in a.seed or seeds:
-            r = benchmark.run_hull(seed, a.suite, a.out, cfg, rescore=a.rescore, library=library)
+            r = benchmark.run_hull(seed, a.suite, a.out, cfg, rescore=a.rescore, library=library, seg=seg, missions=a.missions)
             print(json.dumps({'seed': seed, 'world': r['world'], 'coverage': r['coverage'],
                               'recall_confirmed': f"{r['map']['confirmed']['found']}/{r['map']['confirmed']['required']}",
                               'stations': f"{r['stations']['correct']}/{r['stations']['inspected']}"}))
@@ -347,6 +351,8 @@ def main(argv=None):
     bm.add_argument('--seed', type=int, action='append', help='run only these hulls of the suite (repeatable)')
     bm.add_argument('--rescore', action='store_true', help='keep the flown missions, redo detection, map, stations and report')
     bm.add_argument('--patches', help='paint the hulls with real defects from this patch library (liaci-patches)')
+    bm.add_argument('--segmenter', help='detect with this deep segmenter model instead of the classical detector')
+    bm.add_argument('--missions', help="reuse the flown missions of another run of the same suite (same hulls)")
     bm.add_argument('--config', help='YAML run settings merged over the defaults')
     bm.set_defaults(fn=_benchmark)
     v = sub.add_parser('preview', help='render the rig at one pose, or the annotated texture')
