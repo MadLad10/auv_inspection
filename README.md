@@ -9,10 +9,11 @@ by its own claims.
 6-DOF vehicle dynamics with added mass and contact, Jaffe-McGlamery underwater image formation with
 a photon-counting camera, and a contrast-to-noise coverage criterion. Milestone 3 (perception) has
 its dataset exporter, perception referee, a classical baseline and a learned region classifier
-(numpy, no downloads) trained on hulls of every paint; a deep detector waits for PyTorch.
-Milestone 4 has the defect map, anode stations checked against the hull plan, the inspection
-report with review statuses, the hull months later (grown and new defects, aged anodes) and change
-detection between two surveys.
+(numpy, no downloads) trained on hulls of every paint; a deep detector (PyTorch, the `learn`
+extra) is not built yet. Milestone 4 has the defect map, anode stations checked against the hull
+plan, the inspection report with review statuses, the hull months later (grown and new defects,
+aged anodes) and change detection between two surveys. Milestone 5 has the benchmark and CI that
+gates on it.
 
 ## What it does now
 
@@ -47,7 +48,7 @@ covers 100% of the inspection band and inspects every item.
 - **Dynamics** ([`dynamics.py`](src/auvinspect/dynamics.py)). The vehicle, a 0.5 x 0.3 x 0.2 m box
   with six thrusters, follows Fossen's marine-craft equations in the scenario's own world. The hull
   and seabed the camera sees are the ones it can touch and its DVL ranges against.
-- **Navigation from sensors only.** [`auv_navigation_fusion`](../auv_navigation_fusion)'s EKF fuses
+- **Navigation from sensors only.** [`auv_navigation_fusion`](https://github.com/MadLad10/auv-navigation-fusion)'s EKF fuses
   the simulated IMU, DVL, depth and compass. Two hull-relative updates are added. A standoff sounder
   on the camera tilt unit measures the range to the hull, which pins the distance from the hull and,
   with depth, the girth position. Lanes run past both hull ends, so the sounder's echo starts or
@@ -257,9 +258,9 @@ pipeline on hulls it was not tuned on, in varied worlds:
   four hulls for tuning; `test`, eight hulls, frozen: scored to report a milestone, never tuned on.
 - **Varied worlds.** Each hull draws from its seed a water visibility (4 to 15 m, by scaling the
   particle scattering) and one of three antifouling paints (red-brown, black, blue). The coverage
-  criterion judges a faint defect against the hull's own paint. The training hulls of the detector
-  and the station model all have red-brown paint and 10 m water, so other paints and waters test
-  how far they carry.
+  criterion judges a faint defect against the hull's own paint. The region classifier and the
+  station model are trained on training-split hulls only: seven in the fixed world and ten whose
+  water and paint are drawn as the benchmark's are (`generate --vary-world`).
 - **Per hull, end to end:** generate, fly the mission, detect, map, check the stations, report, and
   keep the referees' verdicts in `result.json`.
 - **Score:** values pooled over the suite's hulls (items found over items required, stations right
@@ -267,6 +268,10 @@ pipeline on hulls it was not tuned on, in varied worlds:
   is the unit of independence; suites under five hulls get no interval.
 - **Gate:** `benchmark gate` fails (exit status 1) when a hull is missing or aborted, or a value
   falls below its minimum (above its maximum) in `benchmark.gate`.
+- **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): on every push to `main` and every
+  pull request, GitHub Actions installs the pinned versions (`constraints.txt`), runs the tests,
+  flies the `ci` suite and applies its gate; the suite's scores and reports are kept as a build
+  artifact. The runner has no GPU and renders with Mesa's software EGL device.
 
 ```bash
 .venv/bin/auvinspect benchmark run   --suite dev --out runs/bench/dev            # all hulls; --seed for one
@@ -361,8 +366,9 @@ sensor (attenuation and scattering), the tilt encoder, thruster telemetry and ba
 ## Quick start
 
 ```bash
+git clone https://github.com/MadLad10/auv_inspection.git && cd auv_inspection
 ~/.local/bin/uv venv .venv --python /usr/bin/python3.10
-~/.local/bin/uv pip install --python .venv/bin/python -e ".[dev]"
+~/.local/bin/uv pip install --python .venv/bin/python -c constraints.txt -e ".[dev]"   # .[dev,learn] adds CPU PyTorch
 export MUJOCO_GL=egl
 .venv/bin/auvinspect generate --seed 7 --out runs/s7       # --vary-world: water and paint drawn from the seed
 .venv/bin/auvinspect survey   --scenario runs/s7 --out runs/s7/survey
@@ -423,9 +429,11 @@ The same hull 12 months later, a second mission over it, and the changes between
 .venv/bin/auvinspect change  --before runs/s7/report_mission --after runs/s7_m12/report_mission --out runs/s7_m12/change
 ```
 
-The sibling package `auv_navigation_fusion` is installed from its built wheel in
-`../auv_navigation_fusion/dist` (see `[tool.uv.sources]` in `pyproject.toml`), never by name from
-an index.
+The sibling package [`auv_navigation_fusion`](https://github.com/MadLad10/auv-navigation-fusion)
+is installed from its repository at a pinned commit (see `dependencies` in `pyproject.toml`), never
+by name from an index: it is not on PyPI, and a package registered there under its name would be
+someone else's code. `constraints.txt` holds the exact versions the tests and the `ci` gate last
+passed with.
 
 ## Design
 
@@ -527,14 +535,15 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 3. Perception: pretrained models (depth, segmentation, features) and a fine-tuned defect detector,
    scored against the ground truth per class and per size. *Done so far: datasets, the perception
    referee, a classical baseline, a learned region classifier (numpy) trained on hulls of every
-   paint. A deep detector needs PyTorch.*
+   paint. A deep detector (PyTorch) is not built yet.*
 4. ~~Defect map and report: defects placed on the hull with sizes and evidence frames; a second
    survey with grown defects for change detection; inspector review.~~ The map with multi-view
    confirmation and its referee, anode stations checked against the hull plan, the photomosaic
    report with review statuses, scenario evolution and change detection with its referee.
 5. Production layer: simulation tests in CI that gate merges on coverage and detection metrics,
    containers, model registry, observability, fault injection. *Done so far: the benchmark (suites
-   of hulls in varied water and paint, pooled scores with hull-resampling intervals, a gate), fault
+   of hulls in varied water and paint, pooled scores with hull-resampling intervals, a gate), CI
+   on GitHub Actions running the tests and the `ci` suite's gate with pinned versions, fault
    injection in missions, models packaged with their provenance and settings digest.*
 6. Fleet: several vehicles sharing a structure under acoustic communication limits.
 

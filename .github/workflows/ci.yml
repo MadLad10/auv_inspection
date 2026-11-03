@@ -1,0 +1,59 @@
+# The tests and the ci benchmark gate, on every push to main and every pull request. The ci suite's
+# scores (benchmark.json, per-hull results and reports) are kept as a build artifact.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests-and-gate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      MUJOCO_GL: egl            # headless rendering: Mesa's software EGL device on a runner without a GPU
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Mesa EGL for headless rendering
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libegl1 libopengl0 libegl-mesa0 libgl1-mesa-dri
+
+      - name: Install with the pinned versions
+        run: |
+          python -m pip install uv==0.13.1
+          uv venv .venv --python "$(which python)"
+          uv pip install --python .venv/bin/python -c constraints.txt -e ".[dev]"
+
+      - name: Tests
+        run: .venv/bin/python -m pytest -q
+
+      - name: Fly the ci suite
+        run: .venv/bin/auvinspect benchmark run --suite ci --out runs/bench/ci
+
+      - name: Gate on the ci suite's scores
+        run: .venv/bin/auvinspect benchmark gate --suite ci --out runs/bench/ci
+
+      - name: Keep the scores
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-ci
+          path: |
+            runs/bench/ci/benchmark.json
+            runs/bench/ci/*/result.json
+            runs/bench/ci/*/report/
+          if-no-files-found: ignore

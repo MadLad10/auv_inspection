@@ -15,13 +15,16 @@ dependencies = [
     "PyYAML>=6,<7",
     "Pillow>=10,<12",
     "scipy>=1.11,<1.15",
-    "auv-navigation-fusion>=0.1,<0.2",
+    # The sibling package is not on PyPI: it comes from its repository at a pinned commit (0.1.0),
+    # never by name from an index (a same-named index package would be someone else's code).
+    "auv-navigation-fusion @ git+https://github.com/MadLad10/auv-navigation-fusion@be9264a77418d83a5b26fd9d9dd691b8aebeed19",
 ]
 
-# The sibling package is not on PyPI: install it from its locally built wheel, never by name from an
-# index (a same-named index package would be someone else's code).
+[project.urls]
+Repository = "https://github.com/MadLad10/auv_inspection"
+Issues = "https://github.com/MadLad10/auv_inspection/issues"
+
 [tool.uv.sources]
-auv-navigation-fusion = { path = "../auv_navigation_fusion/dist/auv_navigation_fusion-0.1.0-py3-none-any.whl" }
 torch = { index = "pytorch-cpu" }
 torchvision = { index = "pytorch-cpu" }
 
