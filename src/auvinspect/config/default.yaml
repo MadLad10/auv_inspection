@@ -370,5 +370,21 @@ registry:                      # versioned models with provenance, license, scor
     segmenter:         {suite: dev, real_defects: true, min: {map_recall_confirmed: 0.6, map_precision_confirmed: 0.6},
                         max: {false_confirmed_per_hull: 5.0}}
 
+observability:                 # what an operator sees of a mission (observe.py)
+  status_every_s: 10.0         # a status event this often (simulated seconds)
+  turbid_visibility_m: 3.0     # visibility from the water-quality sensor below this: turbid_water ...
+  turbid_clear_factor: 1.25    # ... and water_clearer once it is back above this many times it
+  battery_warn_pct: 35.0       # battery_low below this; the reserve itself aborts (onboard.battery_reserve_pct)
+  alerts:                      # rules over a run's metrics (`auvinspect health`): metric{labels} op value
+    - {name: mission abandoned, metric: auvinspect_mission_aborted, op: '>', value: 0, severity: critical}
+    - {name: critical events, metric: auvinspect_events_total, labels: {level: critical}, op: '>', value: 0, severity: critical}
+    - {name: claimed coverage short, metric: auvinspect_claimed_fraction, op: '<', value: 0.99, severity: warning}
+    - {name: holes left, metric: auvinspect_holes_remaining, op: '>', value: 0, severity: warning}
+    - {name: dead frames, metric: auvinspect_frames_total, labels: {claim: black}, op: '>', value: 0, severity: warning}
+    - {name: legs timed out, metric: auvinspect_legs_total, labels: {outcome: timeout}, op: '>', value: 0, severity: warning}
+    - {name: battery low at the end, metric: auvinspect_battery_percent, op: '<', value: 35.0, severity: warning}
+    - {name: false claims (referee), metric: auvinspect_referee_false_claim_fraction, op: '>', value: 0.005, severity: critical}
+    - {name: hull contact (referee), metric: auvinspect_referee_contact_ticks_total, op: '>', value: 0, severity: critical}
+
 # Fault schedule: [{type, t_start, duration (null = permanent), params}]; types in faults.py.
 faults: []

@@ -11,7 +11,9 @@ After the planned survey the vehicle plans revisits of the holes in its claimed 
 onboard.replan_rounds rounds. When its battery monitor reads below onboard.battery_reserve_pct, the
 vehicle abandons the mission and climbs along the hull at the standoff to the waterline (a path that
 keeps clear of the hull, even from under the bilge). The referee then reports the true coverage, where the claim departs
-from it, the navigation error, the clearance to the hull and the fault log.
+from it, the navigation error, the clearance to the hull and the fault log. As it flies, the mission
+writes the operator's event stream (events.jsonl: only what the vehicle knows), and at the end its
+metrics (metrics.prom), as observe.py describes.
 """
 from __future__ import annotations
 
@@ -27,6 +29,7 @@ from PIL import Image
 from .camera import axes
 from .coverage import Coverage
 from .guidance import Controller, Leg, LegFollower, Path, survey_legs
+from .observe import METRICS_FILE, Events, mission_samples, write_metrics
 from .onboard import Onboard
 from .render import InspectionRenderer
 from .rng import stream
@@ -71,6 +74,7 @@ class _Mission:
         self.leg_log: list[dict] = []
         self.aborted = None
         self.surfacing = False
+        self.events = Events(out_dir, self.cfg)
 
     # ------------------------------------------------------------------ one leg
     def fly(self, leg, leg_index: int, fj) -> str:
@@ -79,10 +83,16 @@ class _Mission:
         v = self.cfg['vehicle']
         t_end = self.vehicle.t + v['leg_timeout_factor'] * max(fol.nominal_duration(), v['lead_m'] / leg.speed)
         while True:
-            self.onboard.update(self.vehicle.readings(), self.vehicle.t)
+            readings = self.vehicle.readings()
+            self.onboard.update(readings, self.vehicle.t)
+            self.events.tick(self.vehicle.t, readings, self.onboard)
             if not self.surfacing and self.onboard.battery_low():
                 self.aborted = f'battery reserve ({self.onboard.battery:.0f}%) at t={self.vehicle.t:.2f} s'
+                self.events.emit(self.vehicle.t, 'abort', 'critical', reason='battery reserve', battery_pct=round(self.onboard.battery, 1),
+                                 action='climbing along the hull to the surface')
                 return 'aborted'
+            if self.events.status_due(self.vehicle.t):
+                self.status(leg, leg_index)
             p_est = self.onboard.position()
             if fol.searching:
                 if not self.onboard.echo:
@@ -105,7 +115,17 @@ class _Mission:
             self.log_tick(p_est, est, p_ref, thrust)
             if self.vehicle.t >= self.cfg['mission']['max_seconds']:
                 self.aborted = 'time limit'
+                self.events.emit(self.vehicle.t, 'abort', 'critical', reason='time limit')
                 return 'aborted'
+
+    def status(self, leg, leg_index: int):
+        """The heartbeat: where the vehicle believes it is, how sure, and how far along."""
+        x, s = self.onboard.camera_hull_xs()
+        sa, sg = self.onboard.hull_std(s)
+        self.events.emit(self.vehicle.t, 'status', 'debug', phase=leg.phase, leg=leg_index, lane=leg.lane, x_m=round(x, 2),
+                         s_m=round(s, 2), std_along_m=round(sa, 3), std_girth_m=round(sg, 3),
+                         battery_pct=round(self.onboard.battery, 1), frames=dict(self.claims),
+                         claimed_fraction=round(self.onboard.claimed.fraction(), 4))
 
     def log_tick(self, p_est, est, p_ref, thrust):
         pos, q = self.vehicle.truth_pose()
@@ -134,6 +154,7 @@ class _Mission:
                 rec['new_cells'] = self.referee.add(f)
                 ob = self.onboard.process_frame(f.rgb, f.exposure_s, f.gain)
                 self.claims[ob['claim']] += 1
+                self.events.frame(v.t, ob['claim'])
                 rec['onboard'] = ob
                 rec['cam_error_hull_m'] = self._hull_error(np.asarray(ob['cam_pos_est']), f.cam_pos, f.cam_mat)
                 self.frame_errors.append(rec['cam_error_hull_m'])
@@ -155,6 +176,8 @@ class _Mission:
         t0 = time.time()
         rounds = []
         legs, holes, k = self.legs, [], 0
+        self.events.emit(0.0, 'mission_started', 'info', seed=self.seed, scenario=self.scn.digest()[:12], legs=len(self.legs),
+                         lanes=sum(1 for leg in self.legs if leg.kind == 'lane'), cameras=self.cams)
         with open(os.path.join(self.out_dir, 'frames.jsonl'), 'w') as fj:
             while True:
                 n0 = self.n_frames
@@ -165,6 +188,8 @@ class _Mission:
                     self.leg_log.append({'phase': leg.phase, 'kind': leg.kind, 'lane': leg.lane, 'outcome': res,
                                          'from_xs': _r([leg.x[0], leg.s[0]], 3), 'to_xs': _r([leg.x[-1], leg.s[-1]], 3),
                                          't': [round(t_start, 2), round(self.vehicle.t, 2)]})
+                    self.events.emit(self.vehicle.t, 'leg_finished', 'info' if res == 'done' else 'warning', phase=leg.phase,
+                                     kind=leg.kind, lane=leg.lane, outcome=res, seconds=round(self.vehicle.t - t_start, 2))
                     if res == 'aborted':
                         if self.aborted.startswith('battery'):
                             self.surface(fj)
@@ -179,6 +204,11 @@ class _Mission:
                     break
                 k += 1
                 legs, holes = self.onboard.revisit_legs(k)
+                if legs:
+                    self.events.emit(self.vehicle.t, 'revisit_planned', 'info', round=k, holes=len(holes), legs=len(legs))
+                elif holes:
+                    self.events.emit(self.vehicle.t, 'revisit_skipped', 'warning', round=k, holes=len(holes),
+                                     reasons=sorted({h.get('skipped', '') for h in holes}))
                 if not legs:
                     if holes:
                         rounds.append({'phase': f'revisit_{k}', 'legs': 0, 'holes_targeted': 0,
@@ -236,9 +266,16 @@ class _Mission:
         })
         return ref
 
+    def finish(self, summary: dict):
+        cl = summary['claimed']
+        self.events.emit(self.vehicle.t, 'mission_finished', 'critical' if self.aborted else 'info',
+                         outcome=f'aborted: {self.aborted}' if self.aborted else 'completed', claimed_fraction=cl['fraction'],
+                         holes_remaining=cl['holes_remaining'], frames=cl['frames'], battery_pct=round(self.onboard.battery, 1))
+
     def write(self, summary: dict):
         with open(os.path.join(self.out_dir, 'coverage.json'), 'w') as f:
             json.dump(summary, f, indent=1)
+        write_metrics(os.path.join(self.out_dir, METRICS_FILE), mission_samples(summary, self.events.counts))
         Image.fromarray(self.referee.image()).save(os.path.join(self.out_dir, 'coverage.png'))
         Image.fromarray(self.onboard.claimed.image()).save(os.path.join(self.out_dir, 'claimed.png'))
         Image.fromarray(claim_check(self.referee.covered(), self.onboard.claimed.covered())).save(
@@ -249,6 +286,7 @@ class _Mission:
                             data=np.asarray(self.ticks, np.float64))
 
     def close(self):
+        self.events.close()
         self.rend.close()
         self.vehicle.close()
 
@@ -271,6 +309,7 @@ def run(scn: Scenario, out_dir: str, save_frames: bool = True, seed: int | None 
     m = _Mission(scn, out_dir, save_frames, scn.seed if seed is None else int(seed), cameras)
     try:
         summary = m.run()
+        m.finish(summary)
         m.write(summary)
     finally:
         m.close()

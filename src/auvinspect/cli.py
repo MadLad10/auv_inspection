@@ -157,6 +157,18 @@ def _stations(a):
     print(json.dumps(out, indent=1))
 
 
+def _health(a):
+    from .observe import health
+    fired, critical = health(a.run, config_mod.load(a.config))
+    print(json.dumps({'run': a.run, 'alerts': fired, 'critical': critical}, indent=1))
+    return 1 if critical else 0
+
+
+def _watch(a):
+    from .observe import watch
+    watch(a.run, follow=not a.no_follow)
+
+
 def _registry(a):
     from . import registry
     cfg = config_mod.load(a.config)
@@ -207,13 +219,16 @@ def _benchmark(a):
                               'recall_confirmed': f"{r['map']['confirmed']['found']}/{r['map']['confirmed']['required']}",
                               'stations': f"{r['stations']['correct']}/{r['stations']['inspected']}"}))
         return 0
+    from .observe import METRICS_FILE, suite_samples, write_metrics
     summary = benchmark.summarize(a.out, a.suite, cfg)
     with open(os.path.join(a.out, 'benchmark.json'), 'w') as f:
         json.dump(summary, f, indent=1)
     if a.action == 'score':
+        write_metrics(os.path.join(a.out, METRICS_FILE), suite_samples(summary))
         print(json.dumps({k: summary[k] for k in ('suite', 'hulls', 'missing', 'values')}, indent=1))
         return 0
     fails = benchmark.gate(summary, cfg)
+    write_metrics(os.path.join(a.out, METRICS_FILE), suite_samples(summary, passed=not fails))
     print(json.dumps({'suite': a.suite, 'passed': not fails, 'failures': fails}, indent=1))
     return 1 if fails else 0
 
@@ -384,6 +399,14 @@ def main(argv=None):
     bm.add_argument('--missions', help="reuse the flown missions of another run of the same suite (same hulls)")
     bm.add_argument('--config', help='YAML run settings merged over the defaults')
     bm.set_defaults(fn=_benchmark)
+    hl = sub.add_parser('health', help="apply the alert rules to a run's metrics (exit 1 on a critical alert)")
+    hl.add_argument('--run', required=True, help='a mission directory')
+    hl.add_argument('--config', help='YAML settings merged over the defaults (observability.alerts)')
+    hl.set_defaults(fn=_health)
+    wt = sub.add_parser('watch', help="follow a mission's event stream as it flies")
+    wt.add_argument('--run', required=True, help='a mission directory')
+    wt.add_argument('--no-follow', action='store_true', help='print the events so far and stop')
+    wt.set_defaults(fn=_watch)
     rg = sub.add_parser('registry', help='versioned models: add, list, show, attach a benchmark score, check, promote, package')
     rg.add_argument('action', choices=['add', 'list', 'show', 'attach', 'check', 'promote', 'package'])
     rg.add_argument('ref', nargs='?', help='<name> (its production version) or <name>@<version>')

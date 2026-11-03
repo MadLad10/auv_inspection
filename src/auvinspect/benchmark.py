@@ -28,7 +28,7 @@ import os
 
 import numpy as np
 
-from . import __version__, baseline, config as config_mod, detector, optics, report, stations
+from . import __version__, baseline, config as config_mod, detector, observe, optics, report, stations
 from .mapping import map_classes
 from .rng import stream
 from .scenario import generate
@@ -78,20 +78,26 @@ def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict |
             raise ValueError(f'{src}: the saved scenario is not this hull of the suite; remove it to fly again')
     elif missions:
         raise ValueError(f'{src}: no flown mission to reuse')
-    else:
-        scn = generate(seed, wcfg, library)
-        digest = scn.save(d)
-        fly(scn, mdir)
     os.makedirs(d, exist_ok=True)
-    if seg is not None:
-        from . import segmenter
-        det_model = None
-        det = segmenter.run_frames(seg['net'], mdir, {**wcfg, 'segmenter': seg['cfg']['segmenter']})
-    else:
-        det_model = detector.load_model(wcfg)
-        det = baseline.run_frames(mdir, wcfg, stations.window_masks(mdir, wcfg), det_model)
-    model = model or stations.load_model(wcfg)
-    report.write(mdir, det, os.path.join(d, 'report'), wcfg, model)
+    trace = observe.Trace(d, suite=suite_name, seed=seed)
+    if not os.path.exists(os.path.join(mdir, 'coverage.json')):
+        with trace.span('generate'):
+            scn = generate(seed, wcfg, library)
+            digest = scn.save(d)
+        with trace.span('fly'):
+            fly(scn, mdir)
+    with trace.span('detect', detector='segmenter' if seg is not None else 'classical'):
+        if seg is not None:
+            from . import segmenter
+            det_model = None
+            det = segmenter.run_frames(seg['net'], mdir, {**wcfg, 'segmenter': seg['cfg']['segmenter']})
+        else:
+            det_model = detector.load_model(wcfg)
+            det = baseline.run_frames(mdir, wcfg, stations.window_masks(mdir, wcfg), det_model)
+    with trace.span('report'):
+        model = model or stations.load_model(wcfg)
+        report.write(mdir, det, os.path.join(d, 'report'), wcfg, model)
+    observe.write_metrics(os.path.join(d, observe.METRICS_FILE), trace.samples())
     with open(os.path.join(mdir, 'coverage.json')) as f:
         cov = json.load(f)
     with open(os.path.join(d, 'report', 'metrics.json')) as f:

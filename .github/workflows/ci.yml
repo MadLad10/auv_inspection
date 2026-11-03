@@ -48,6 +48,9 @@ jobs:
       - name: Gate on the ci suite's scores
         run: .venv/bin/auvinspect benchmark gate --suite ci --out runs/bench/ci
 
+      - name: Alert rules on the ci missions
+        run: for d in runs/bench/ci/*/mission; do .venv/bin/auvinspect health --run "$d"; done
+
       - name: Keep the scores
         if: always()
         uses: actions/upload-artifact@v4
@@ -55,8 +58,12 @@ jobs:
           name: benchmark-ci
           path: |
             runs/bench/ci/benchmark.json
+            runs/bench/ci/metrics.prom
             runs/bench/ci/*/result.json
+            runs/bench/ci/*/trace.jsonl
             runs/bench/ci/*/report/
+            runs/bench/ci/*/mission/events.jsonl
+            runs/bench/ci/*/mission/metrics.prom
           if-no-files-found: ignore
 
   container:

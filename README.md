@@ -5,7 +5,7 @@ exact ground truth: every defect's position, outline and area is known, and ever
 knows which defect it shows. The pipeline can therefore be scored by an independent referee, not
 by its own claims.
 
-**Status:** milestones 1 to 4 of 6 done, on a physically based environment: Fossen
+**Status:** milestones 1 to 5 of 6 done, on a physically based environment: Fossen
 6-DOF vehicle dynamics with added mass and contact, Jaffe-McGlamery underwater image formation with
 a photon-counting camera, and a contrast-to-noise coverage criterion. Milestone 3 (perception) has
 its dataset exporter, perception referee, a classical baseline and a learned region classifier
@@ -15,8 +15,8 @@ segmenter (PyTorch, the `learn` extra) with an ImageNet-pretrained encoder that 
 defects on the frozen test hulls, against 16% for the classical detector. Milestone 4 has the
 defect map, anode stations checked against the hull plan, the inspection report with review
 statuses, the hull months later (grown and new defects, aged anodes) and change detection between
-two surveys. Milestone 5 has the benchmark and CI that gates on it, a container image and a model
-registry.
+two surveys. Milestone 5 has the benchmark and CI that gates on it, a container image, a model
+registry, and observability (the vehicle's event stream, metrics, stage traces, alert rules).
 
 ## What it does now
 
@@ -525,6 +525,52 @@ The rules:
 | `anode_stations@1` (packaged) | this project | yes | procedural: stations 28 of 28 |
 | `segmenter@1` (`seg_all`) | CC BY-NC-SA 4.0, LIACi adaptation | no | real defects: recall 0.64, precision 0.75, 3.25 false per hull |
 
+### Observability ([`observe.py`](src/auvinspect/observe.py))
+
+What an operator sees of a mission, kept apart from what only the simulator knows:
+- **Event stream** (`events.jsonl` in a mission directory). It is written and flushed as the
+  vehicle flies, and holds only what the vehicle knows: no ground truth, and no fault injected
+  unless its symptoms show. Events:
+  - the mission starting and finishing, and each leg's outcome;
+  - a status heartbeat every 10 simulated seconds: estimated hull position and its uncertainty,
+    battery, frames by claim, claimed share;
+  - revisits planned or skipped;
+  - the DVL lost and restored, dead camera frames, sensors excluded by the health checks;
+  - turbid water, from the water-quality sensor;
+  - low battery, and an abort.
+
+  Events carry simulated time only, so the same mission writes the same stream. `auvinspect watch`
+  follows the stream as the mission flies.
+- **Metrics** (`metrics.prom`, Prometheus text format for a textfile collector). The vehicle's own
+  numbers are `auvinspect_*`: frames by claim, legs by outcome, events by level, claimed share,
+  holes left, battery. The referee's verdicts, which exist only in simulation, are
+  `auvinspect_referee_*`: coverage, false claims, navigation error, clearance, contacts, faults
+  injected. `benchmark score` and `gate` write a suite's values and its gate result the same way.
+- **Stage traces** (`trace.jsonl` beside a benchmark hull's result): generate, fly, detect and
+  report, with start time, duration and status; their durations are metrics too.
+- **Alert rules** (`observability.alerts`): conditions on a run's metrics, such as an abandoned
+  mission, critical events, claimed coverage short of 99%, holes left, dead frames, legs timed out,
+  false claims or contact. `auvinspect health --run` prints the alerts that fire and exits 1 on a
+  critical one. CI applies them to the `ci` suite's missions and keeps the streams, metrics and
+  traces with the scores.
+
+A mission on the small hull with a 30 s DVL dropout and a 15 s camera blackout, as `watch` shows it
+(status lines left out):
+
+```
+     0.00 s  INFO     mission_started   seed=3 scenario=6422cddef575 legs=8 lanes=4 cameras=['port']
+    60.00 s  WARNING  dvl_lost
+    62.90 s  INFO     leg_finished      phase=survey kind=lane lane=1 outcome=done seconds=28.0
+    90.00 s  INFO     dvl_restored
+   104.50 s  WARNING  camera_black
+   118.25 s  INFO     camera_restored
+   132.55 s  INFO     revisit_planned   round=1 holes=1 legs=4
+   184.95 s  INFO     mission_finished  outcome=completed claimed_fraction=1.0 holes_remaining=0 frames={'claimed': 39, 'uncertain': 7, 'black': 4, 'below_limits': 0} battery_pct=98.9
+```
+
+`health` then raises one warning (dead frames) and no critical alert. The event stream does not
+change the mission: the `ci` suite flown with it gives the same results.
+
 ## Physics
 
 ### Water and light ([`optics.py`](src/auvinspect/optics.py))
@@ -813,7 +859,12 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
   never over-claimed; the faults the vehicle absorbs (stuck depth caught by the frozen-value check,
   compass, gyro bias, sounder dropout, dead thruster); a low battery aborting the mission and
   surfacing along the hull; claims shrinking by the pose uncertainty except at band and hull edges;
-  an empty battery driving nothing; determinism.
+  an empty battery driving nothing; determinism. Each fault's event at its time (DVL lost and
+  restored, camera black and restored, turbid water, sensor excluded, battery low then abort), the
+  nominal stream free of ground truth and warnings, the heartbeat's spacing, the metrics against
+  the summary, the alert rules on each run;
+- observability: the metrics format round-tripped (labels escaped, NaN), alert rules matching
+  labels, stage spans kept when a stage fails, `watch` stopping at the mission's end.
 
 ## Roadmap
 
@@ -831,13 +882,13 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
    survey with grown defects for change detection; inspector review.~~ The map with multi-view
    confirmation and its referee, anode stations checked against the hull plan, the photomosaic
    report with review statuses, scenario evolution and change detection with its referee.
-5. Production layer: simulation tests in CI that gate merges on coverage and detection metrics,
-   containers, model registry, observability, fault injection. *Done so far: the benchmark (suites
-   of hulls in varied water and paint, pooled scores with hull-resampling intervals, a gate), CI
-   on GitHub Actions running the tests and the `ci` suite's gate with pinned versions, a container
-   image (tested in CI), fault injection in missions, models packaged with their provenance and settings digest, a model
-   registry (versions, license from the training sources, scores made with the model, promotion
-   rules, digests checked on use).*
+5. ~~Production layer: simulation tests in CI that gate merges on coverage and detection metrics,
+   containers, model registry, observability, fault injection.~~ The benchmark (suites of hulls in
+   varied water and paint, pooled scores with hull-resampling intervals, a gate), CI on GitHub
+   Actions running the tests, the `ci` suite's gate and its alert rules with pinned versions, a
+   container image built and run in CI, fault injection in missions, a model registry (versions,
+   license from the training sources, scores made with the model, promotion rules, digests checked
+   on use), and observability (the vehicle's event stream, metrics, stage traces, alert rules).
 6. Fleet: several vehicles sharing a structure under acoustic communication limits.
 
 ## Limitations

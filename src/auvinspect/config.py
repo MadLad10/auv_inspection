@@ -219,6 +219,14 @@ def _validate_mission(cfg: dict) -> None:
                    for r in rg['promotion'].values()),
            'registry: a root directory; promotion rules for region_classifier, anode_stations and segmenter, '
            'each with a benchmark suite, real_defects true or false, and numeric min and max limits')
+    ob = cfg['observability']
+    _check(ob['status_every_s'] > 0 and ob['turbid_visibility_m'] > 0 and ob['turbid_clear_factor'] >= 1
+           and 0 <= ob['battery_warn_pct'] <= 100
+           and all(set(a) <= {'name', 'metric', 'labels', 'op', 'value', 'severity'} and a.get('op') in ('>', '>=', '<', '<=', '==', '!=')
+                   and a.get('severity') in ('warning', 'critical') and isinstance(a.get('value'), (int, float))
+                   and str(a.get('metric', '')).startswith('auvinspect_') for a in ob['alerts']),
+           'observability: status_every_s and turbid_visibility_m positive, turbid_clear_factor >= 1, battery_warn_pct in [0, 100]; '
+           'alerts {name, metric: auvinspect_*, labels, op (> >= < <= == !=), value, severity: warning or critical}')
     ref = cfg['coverage']['reference_albedo']
     _check(ref == 'paint' or (isinstance(ref, list) and len(ref) == 3), "coverage.reference_albedo: 'paint' or an RGB triple")
     _check(isinstance(cfg['faults'], list), 'faults must be a list')
