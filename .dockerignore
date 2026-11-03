@@ -1,0 +1,10 @@
+# The image takes pyproject.toml, constraints.txt, README.md, src and tests; nothing else is sent.
+*
+!pyproject.toml
+!constraints.txt
+!README.md
+!src
+!tests
+**/__pycache__
+**/*.egg-info
+**/.pytest_cache

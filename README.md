@@ -15,7 +15,8 @@ segmenter (PyTorch, the `learn` extra) with an ImageNet-pretrained encoder that 
 defects on the frozen test hulls, against 16% for the classical detector. Milestone 4 has the
 defect map, anode stations checked against the hull plan, the inspection report with review
 statuses, the hull months later (grown and new defects, aged anodes) and change detection between
-two surveys. Milestone 5 has the benchmark and CI that gates on it.
+two surveys. Milestone 5 has the benchmark and CI that gates on it, a container image and a model
+registry.
 
 ## What it does now
 
@@ -599,6 +600,32 @@ export MUJOCO_GL=egl
 .venv/bin/auvinspect preview  --scenario runs/s7 --x 10 --girth 3.9 --out runs/s7/rig.png
 ```
 
+### Container
+
+The [`Dockerfile`](Dockerfile) builds the pipeline headless:
+- Ubuntu 22.04 and Python 3.10, as on the CI runner, with the base image pinned by digest;
+- Mesa's software EGL renderer;
+- the versions in `constraints.txt`;
+- run as a non-root user, with no PyTorch.
+
+By default the navigation package is built from its repository at the commit pinned in
+`pyproject.toml`; `--build-context nav=<dir>` takes an already built wheel instead. Inside the
+image the full test suite passes (the two PyTorch tests are skipped) and the `ci` gate passes. CI
+builds the image and surveys a small hull in it.
+
+```bash
+docker build -t auvinspect .        # or: --build-context nav=../auv_navigation_fusion/dist
+docker run --rm -v "$PWD/runs:/work/runs" auvinspect benchmark run --suite ci --out runs/bench/ci
+docker run --rm -v "$PWD/runs:/work/runs" auvinspect benchmark gate --suite ci --out runs/bench/ci
+```
+
+Results are bit-identical on one renderer, not across renderers. A GPU's renderer and Mesa's
+software renderer sample the texture slightly differently, and the sensor's photon noise, drawn
+for each pixel's signal, then differs everywhere. The scenarios, the flown missions, the pixel
+labels and the coverage verdicts stay the same, and the scores move within the noise. On the `ci`
+suite, confirmed-findings recall is 0.83 on this machine's Intel GPU and 0.86 in software, as in
+the image and on CI; both pass the gate.
+
 `--no-frames` scores coverage without writing images. `--config run.yaml` overrides run settings
 (cameras, survey, coverage, vehicle, navigation, faults, ...) without changing the scenario, for
 example a fault schedule:
@@ -807,8 +834,8 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 5. Production layer: simulation tests in CI that gate merges on coverage and detection metrics,
    containers, model registry, observability, fault injection. *Done so far: the benchmark (suites
    of hulls in varied water and paint, pooled scores with hull-resampling intervals, a gate), CI
-   on GitHub Actions running the tests and the `ci` suite's gate with pinned versions, fault
-   injection in missions, models packaged with their provenance and settings digest, a model
+   on GitHub Actions running the tests and the `ci` suite's gate with pinned versions, a container
+   image (tested in CI), fault injection in missions, models packaged with their provenance and settings digest, a model
    registry (versions, license from the training sources, scores made with the model, promotion
    rules, digests checked on use).*
 6. Fleet: several vehicles sharing a structure under acoustic communication limits.

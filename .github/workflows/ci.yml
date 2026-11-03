@@ -1,5 +1,6 @@
-# The tests and the ci benchmark gate, on every push to main and every pull request. The ci suite's
-# scores (benchmark.json, per-hull results and reports) are kept as a build artifact.
+# The tests and the ci benchmark gate, and the container image, on every push to main and every pull
+# request. The ci suite's scores (benchmark.json, per-hull results and reports) are kept as a build
+# artifact.
 name: ci
 
 on:
@@ -57,3 +58,22 @@ jobs:
             runs/bench/ci/*/result.json
             runs/bench/ci/*/report/
           if-no-files-found: ignore
+
+  container:
+    # The image builds (the navigation package from its repository at the pinned commit) and renders
+    # headless: a small hull generated and surveyed inside it, run as its non-root user.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t auvinspect .
+
+      - name: Generate and survey a small hull inside it
+        run: |
+          mkdir -p smoke && chmod 777 smoke
+          printf 'hull: {length_m: 6.0}\n' > smoke/small.yaml
+          docker run --rm -v "$PWD/smoke:/work/smoke" auvinspect generate --seed 3 --config smoke/small.yaml --out smoke/s3
+          docker run --rm -v "$PWD/smoke:/work/smoke" auvinspect survey --scenario smoke/s3 --no-frames --out smoke/s3/survey
+          python3 -c "import json; c = json.load(open('smoke/s3/survey/coverage.json')); print(c['coverage_fraction']); assert c['coverage_fraction'] > 0.99"
