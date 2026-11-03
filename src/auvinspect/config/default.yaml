@@ -259,6 +259,19 @@ real_images:                   # public imagery of real inspections, imported as
     val_block: 50              # official training images, in file order, in blocks of this many ...
     val_every: 7               # ... of which every 7th block is held out for validation (one video's
                                # neighbouring frames stay on one side)
+    patches:                   # real defects for the simulator (patches.py), cut from our training split only
+      min_pixels: 2000         # object size in the original image
+      max_overlap: 0.05        # share of the object under other labelled objects (the hull aside)
+      ring_width: 0.15         # the ring of paint around it: this times sqrt(object pixels) wide ...
+      ring_min_px: 4           # ... and at least this
+      min_ring_hull: 0.7       # share of the ring that is plain hull
+      ring_luma: [40, 200]     # median 8-bit brightness of the ring: neither murky nor glaring
+      glare_dn: 250            # a pixel is saturated with any channel at this or above ...
+      max_glare: 0.02          # ... and at most this share of the object's pixels may be
+      reflectance: [0.03, 10.0]  # clamp on the reflectance relative to the paint around it ...
+      max_clamped: 0.01        # ... reached by at most this share of the object (else the ring was not its paint)
+      max_side_px: 256         # longer side of a stored patch
+      max_upscale: 2.5         # a defect takes a patch enlarged at most this much (the largest one if none is)
 
 mapping:                       # findings on the hull map, fused across frames, and their scoring
   samples_per_box: 7           # rays per side of a detection box cast onto the hull
@@ -279,6 +292,24 @@ detector:                      # learned class for the baseline's candidate regi
   learning_rate: 0.003
   l2: 0.0001
   class_weight_power: 0.5      # class weight = frequency^-power (1: fully balanced)
+
+segmenter:                     # deep segmenter (segmenter.py): MobileNetV2 encoder pretrained on ImageNet, light decoder
+  backbone_sha256: 7ebf99e03e254b273379b23edca7ec0da9f48273b23a332b93c1c99d49e86e8f   # torchvision mobilenet_v2-7ebf99e0.pth
+  normalise_mean: [0.485, 0.456, 0.406]    # the encoder's ImageNet input normalisation
+  normalise_std: [0.229, 0.224, 0.225]
+  input_width: 320             # images resized to this width ...
+  input_height: 240            # ... and padded to this height (the loss ignores the padding)
+  decoder_channels: 96
+  epochs: 20
+  batch: 8
+  learning_rate: 0.001         # AdamW, cosine decay over the run
+  encoder_lr_factor: 0.1       # the pretrained encoder learns at this share of it
+  weight_decay: 0.0001
+  class_weight_power: 0.5      # class weight = pixel frequency^-power
+  brightness: 0.25             # jitter: gain within 1 +- this ...
+  contrast: 0.25               # ... and contrast within 1 +- this
+  min_region_px: 50            # a predicted region smaller than this (dataset pixels) is not reported
+  threads: 8
 
 stations:                      # anode stations from the hull plan, each checked in the frames that see it
   window_margin_m: 0.06        # the station window: the anode's plan footprint grown by this

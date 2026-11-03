@@ -70,19 +70,26 @@ def _raster(polygons: list, scale: float, size: tuple[int, int]) -> np.ndarray:
     return np.asarray(m, bool)
 
 
-def import_dataset(root: str, out_dir: str, cfg: dict) -> dict:
-    """Write the LIACi images under `root` (the unpacked LIACi_dataset_pretty) as a perception dataset."""
-    p, lp = cfg['perception'], cfg['real_images']['liaci']
-    classes = list(p['classes'])
+def read(root: str, cfg: dict) -> tuple[dict, dict, dict, dict]:
+    """LIACi's labels under `root` (the unpacked LIACi_dataset_pretty), its official split by file name,
+    the category names by id, and the digests of the two files."""
     labels_path, split_path = os.path.join(root, 'coco-labels.json'), os.path.join(root, 'train_test_split.csv')
     with open(labels_path) as f:
         coco = json.load(f)
     with open(split_path) as f:
         official = {r['file_name']: r['split'] for r in csv.DictReader(f)}
     names = {c['id']: c['name'] for c in coco['categories']}
-    unknown = set(lp['classes']) - set(names.values())
+    unknown = set(cfg['real_images']['liaci']['classes']) - set(names.values())
     if unknown:
         raise ValueError(f'real_images.liaci.classes names categories LIACi does not have: {sorted(unknown)}')
+    return coco, official, names, {'labels_sha256': _sha256(labels_path), 'split_sha256': _sha256(split_path)}
+
+
+def import_dataset(root: str, out_dir: str, cfg: dict) -> dict:
+    """Write the LIACi images under `root` (the unpacked LIACi_dataset_pretty) as a perception dataset."""
+    p, lp = cfg['perception'], cfg['real_images']['liaci']
+    classes = list(p['classes'])
+    coco, official, names, digests = read(root, cfg)
     by_image: dict[int, list] = {}
     for a in coco['annotations']:
         if names[a['category_id']] in lp['classes']:
@@ -125,7 +132,7 @@ def import_dataset(root: str, out_dir: str, cfg: dict) -> dict:
                        'image': os.path.join('images', split, fid + '.png'), 'objects': objs}
         splits[split].append(fid)
     ann = {'classes': classes, 'splits': splits, 'frames': frames,
-           'source': {**SOURCE, 'labels_sha256': _sha256(labels_path), 'split_sha256': _sha256(split_path),
+           'source': {**SOURCE, **digests,
                       'settings': {'liaci': lp, 'min_visible_px': p['min_visible_px']}}}
     with open(os.path.join(out_dir, 'annotations.json'), 'w') as f:
         json.dump(ann, f)

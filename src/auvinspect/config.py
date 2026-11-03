@@ -190,6 +190,20 @@ def _validate_mission(cfg: dict) -> None:
     _check(lq['width'] >= 32 and lq['val_block'] >= 1 and lq['val_every'] >= 2
            and set(lq['classes'].values()) <= set(cfg['perception']['classes']),
            'real_images.liaci: width >= 32, val_block >= 1, val_every >= 2, classes mapped to perception.classes')
+    pp = lq['patches']
+    _check(pp['min_pixels'] >= 1 and 0 <= pp['max_overlap'] <= 1 and pp['ring_width'] >= 0 and pp['ring_min_px'] >= 1
+           and 0 < pp['min_ring_hull'] <= 1 and 0 <= pp['ring_luma'][0] <= pp['ring_luma'][1] <= 255 and 0 < pp['glare_dn'] <= 255
+           and 0 <= pp['max_glare'] <= 1 and 0 <= pp['max_clamped'] <= 1 and 0 < pp['reflectance'][0] < pp['reflectance'][1] and pp['max_side_px'] >= 8
+           and pp['max_upscale'] >= 1,
+           'real_images.liaci.patches: sizes positive, shares in [0, 1], ring_luma and glare_dn within 8 bits, '
+           'reflectance an increasing positive range, max_side_px >= 8, max_upscale >= 1')
+    sg = cfg['segmenter']
+    _check(len(sg['backbone_sha256']) == 64 and sg['input_width'] % 8 == 0 and sg['input_height'] % 8 == 0
+           and min(sg['decoder_channels'], sg['epochs'], sg['batch'], sg['threads'], sg['min_region_px']) >= 1
+           and sg['learning_rate'] > 0 and 0 < sg['encoder_lr_factor'] <= 1 and sg['weight_decay'] >= 0
+           and 0 <= sg['class_weight_power'] <= 1 and 0 <= sg['brightness'] < 1 and 0 <= sg['contrast'] < 1
+           and len(sg['normalise_mean']) == 3 and len(sg['normalise_std']) == 3 and min(sg['normalise_std']) > 0,
+           'segmenter: a SHA-256, input size in multiples of 8, counts >= 1, rates positive, jitter in [0, 1)')
     st = cfg['stations']
     _check(st['window_margin_m'] >= 0 and st['glare_margin_m'] >= 0 and st['max_distance2'] > 0 and set(st['classes']) <= set(cfg['perception']['classes']),
            'stations: window_margin_m >= 0, classes among perception.classes')

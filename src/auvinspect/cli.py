@@ -12,13 +12,20 @@ from . import config as config_mod
 from .scenario import Scenario, generate
 
 
+def _library(path):
+    if not path:
+        return None
+    from .patches import Library
+    return Library(path)
+
+
 def _generate(a):
     cfg = config_mod.load(a.config)
     drawn = None
     if a.vary_world:
         from .benchmark import world
         cfg, drawn = world(a.seed, cfg, {})
-    scn = generate(a.seed, cfg)
+    scn = generate(a.seed, cfg, _library(a.patches))
     digest = scn.save(a.out)
     counts: dict[str, int] = {}
     for it in scn.items:
@@ -52,6 +59,34 @@ def _dataset(a):
 def _import_liaci(a):
     from .liaci import import_dataset
     print(json.dumps(import_dataset(a.root, a.out, config_mod.load(a.config)), indent=1))
+
+
+def _liaci_patches(a):
+    from .patches import build
+    print(json.dumps(build(a.root, a.out, config_mod.load(a.config)), indent=1))
+
+
+def _train_segmenter(a):
+    from . import segmenter
+    model = segmenter.train(a.dataset, a.backbone, config_mod.load(a.config), a.seed, log=lambda line: print(line, flush=True))
+    segmenter.save(model, a.out)
+    print(json.dumps({'out': a.out, 'epoch': model['meta']['epoch'], 'val_map': model['meta']['val_map']}, indent=1))
+
+
+def _segment(a):
+    from . import segmenter
+    if bool(a.dataset) == bool(a.run) or (a.dataset and not a.split):
+        raise ValueError('segment: give --dataset with --split, or --run')
+    net, meta, cfg = segmenter.load(a.model, config_mod.load(a.config))
+    if a.run:
+        det, extra = segmenter.run_frames(net, a.run, cfg), {}
+    else:
+        det, conf = segmenter.detect(net, a.dataset, a.split, cfg)
+        extra = {'pixel_iou': segmenter.pixel_iou(conf, meta['classes'])}
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    with open(a.out, 'w') as f:
+        json.dump(det, f)
+    print(json.dumps({'frames': len(det), 'detections': sum(len(v) for v in det.values()), 'out': a.out, **extra}, indent=1))
 
 
 def _detect(a):
@@ -128,12 +163,13 @@ def _benchmark(a):
     if a.suite not in cfg['benchmark']['suites']:
         raise ValueError(f'no benchmark suite {a.suite!r}; suites: {sorted(cfg["benchmark"]["suites"])}')
     if a.action == 'run':
+        library = _library(a.patches)
         seeds = cfg['benchmark']['suites'][a.suite]['seeds']
         stray = [s for s in a.seed or [] if s not in seeds]
         if stray:
             raise ValueError(f'seeds {stray} are not in suite {a.suite!r} ({seeds})')
         for seed in a.seed or seeds:
-            r = benchmark.run_hull(seed, a.suite, a.out, cfg, rescore=a.rescore)
+            r = benchmark.run_hull(seed, a.suite, a.out, cfg, rescore=a.rescore, library=library)
             print(json.dumps({'seed': seed, 'world': r['world'], 'coverage': r['coverage'],
                               'recall_confirmed': f"{r['map']['confirmed']['found']}/{r['map']['confirmed']['required']}",
                               'stations': f"{r['stations']['correct']}/{r['stations']['inspected']}"}))
@@ -167,7 +203,7 @@ def _evolve(a):
     from .evolution import changes, evolve
     cfg = config_mod.load(a.config)
     base = Scenario.load(a.scenario, cfg)
-    later = evolve(base, a.months, cfg)
+    later = evolve(base, a.months, cfg, _library(a.patches))
     digest = later.save(a.out)
     counts: dict[str, int] = {}
     for v in changes(base, later, cfg['change']['growth_ratio']).values():
@@ -210,6 +246,7 @@ def main(argv=None):
     g.add_argument('--out', required=True)
     g.add_argument('--config', help='YAML file merged over the defaults')
     g.add_argument('--vary-world', action='store_true', help="draw the water and paint from the seed, as the benchmark's hulls do")
+    g.add_argument('--patches', help='a patch library (liaci-patches): corrosion, coating damage and biofouling from real images')
     g.set_defaults(fn=_generate)
     s = sub.add_parser('survey', help='run the planned survey over a scenario')
     s.add_argument('--scenario', required=True)
@@ -234,6 +271,26 @@ def main(argv=None):
     q.add_argument('--out', required=True)
     q.add_argument('--config', help='YAML settings merged over the defaults')
     q.set_defaults(fn=_import_liaci)
+    lp = sub.add_parser('liaci-patches', help='cut real defects out of the LIACi training images, for the simulator')
+    lp.add_argument('--root', required=True, help='the unpacked LIACi_dataset_pretty directory')
+    lp.add_argument('--out', required=True)
+    lp.add_argument('--config', help='YAML settings merged over the defaults')
+    lp.set_defaults(fn=_liaci_patches)
+    tg = sub.add_parser('train-segmenter', help='fit the deep segmenter on the train splits of perception datasets')
+    tg.add_argument('--dataset', action='append', required=True, help='a dataset directory (dataset or import-liaci; repeatable)')
+    tg.add_argument('--backbone', required=True, help="torchvision's MobileNetV2 ImageNet weights (mobilenet_v2-7ebf99e0.pth)")
+    tg.add_argument('--out', required=True, help='model file (.pt)')
+    tg.add_argument('--seed', type=int, default=0)
+    tg.add_argument('--config', help='YAML settings merged over the defaults')
+    tg.set_defaults(fn=_train_segmenter)
+    sg = sub.add_parser('segment', help='run the deep segmenter over a dataset split (boxes for evaluate, pixel IoU) or a recorded run (for report)')
+    sg.add_argument('--model', required=True)
+    sg.add_argument('--dataset')
+    sg.add_argument('--split', choices=['train', 'val', 'test'])
+    sg.add_argument('--run', help='a survey or mission directory: detections keyed by frame name')
+    sg.add_argument('--out', required=True, help='detections JSON')
+    sg.add_argument('--config', help='YAML settings merged over the defaults')
+    sg.set_defaults(fn=_segment)
     t = sub.add_parser('detect', help='run the classical baseline detector over a dataset')
     t.add_argument('--dataset', required=True)
     t.add_argument('--out', required=True, help='detections JSON')
@@ -275,6 +332,7 @@ def main(argv=None):
     ev.add_argument('--months', type=float, required=True)
     ev.add_argument('--out', required=True)
     ev.add_argument('--config', help='YAML settings merged over the defaults (evolution rates)')
+    ev.add_argument('--patches', help='the patch library a hull with real defects was painted from')
     ev.set_defaults(fn=_evolve)
     ch = sub.add_parser('change', help='compare the reports of two surveys of one hull')
     ch.add_argument('--before', required=True, help='report directory of the earlier survey')
@@ -288,6 +346,7 @@ def main(argv=None):
     bm.add_argument('--out', required=True, help='directory of the suite\'s hulls and results')
     bm.add_argument('--seed', type=int, action='append', help='run only these hulls of the suite (repeatable)')
     bm.add_argument('--rescore', action='store_true', help='keep the flown missions, redo detection, map, stations and report')
+    bm.add_argument('--patches', help='paint the hulls with real defects from this patch library (liaci-patches)')
     bm.add_argument('--config', help='YAML run settings merged over the defaults')
     bm.set_defaults(fn=_benchmark)
     v = sub.add_parser('preview', help='render the rig at one pose, or the annotated texture')

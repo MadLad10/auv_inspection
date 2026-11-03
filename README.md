@@ -9,11 +9,12 @@ by its own claims.
 6-DOF vehicle dynamics with added mass and contact, Jaffe-McGlamery underwater image formation with
 a photon-counting camera, and a contrast-to-noise coverage criterion. Milestone 3 (perception) has
 its dataset exporter, perception referee, a classical baseline and a learned region classifier
-(numpy, no downloads) trained on hulls of every paint, and imports the real LIACi inspection
-images for scoring and training; a deep detector (PyTorch, the `learn` extra) is not built yet. Milestone 4 has the defect map, anode stations checked against the hull
-plan, the inspection report with review statuses, the hull months later (grown and new defects,
-aged anodes) and change detection between two surveys. Milestone 5 has the benchmark and CI that
-gates on it.
+(numpy, no downloads) trained on hulls of every paint. It imports the real LIACi inspection images
+for scoring and training, paints LIACi's real defects onto simulated hulls, and has a deep
+segmenter (PyTorch, the `learn` extra) with an ImageNet-pretrained encoder. Milestone 4 has the
+defect map, anode stations checked against the hull plan, the inspection report with review
+statuses, the hull months later (grown and new defects, aged anodes) and change detection between
+two surveys. Milestone 5 has the benchmark and CI that gates on it.
 
 ## What it does now
 
@@ -156,7 +157,7 @@ are checked differently, at the stations of the hull plan (below).
 
 #### Real images: LIACi
 
-The simulator's defects are procedural. To measure perception on real hulls, the pipeline reads
+The simulator draws its defects. To measure perception on real hulls, the pipeline reads
 [LIACi](https://liaci.sintef.cloud): 1,893 images from ROV inspections of ships, with polygons
 drawn by inspection experts in ten categories. LIACi is licensed
 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) (non-commercial,
@@ -197,6 +198,114 @@ image is as similar to its nearest training image as training images are to each
 show propellers, sea chests and valves rather than hull plating. Scores on them are scores on
 LIACi's images, not field performance. The classical baseline does not run on them: it needs a
 recorded run's paint reference and the hull's paint. They are for learned models.
+
+#### Real defects in the simulator
+
+`liaci-patches` ([`patches.py`](src/auvinspect/patches.py)) cuts LIACi's corrosion, paint peel and
+marine growth out of its original images. It uses our training split only, so LIACi's test images
+and our validation blocks stay unseen. `generate --patches` then paints these real defects on a
+simulated hull in place of procedural ones. The rest of the world is unchanged (hull, anodes,
+cracks, water, camera), and the labels stay exact, because the generator places every patch
+itself.
+
+- **Which objects.** An object is kept when it is whole (at least 2,000 pixels, clear of the image
+  border, at most 5% of it under other labelled objects) and lies on plain hull. The ring around
+  it must be at least 70% hull and no other object, neither murky nor glaring. At most 2% of the
+  object's pixels may be saturated.
+- **Relative reflectance.** The image is decoded from sRGB to linear and divided, per channel, by
+  a plane fitted to the log of the ring. This removes the paint's colour, the lamp's colour and
+  its falloff across the patch, and the water's colour. An object with more than 1% of its pixels
+  outside the reflectance range [0.03, 10] is dropped: its ring was not the paint under it, as on
+  a structure's edge.
+- **Placement.** The defect's area is drawn as before. A patch of its class is drawn, turned,
+  maybe mirrored and scaled to that area; patches are never enlarged more than 2.5 times when one
+  big enough exists. Its relative reflectance multiplies the hull paint under it. The scenario
+  records the library's digest and each item its patch: the same seed, configuration and library
+  give the same digest. Procedural hulls keep their digests.
+- **Change.** `evolve --patches` grows a real defect by continuing its own texture: each new pixel
+  copies the pixel mirrored across the old outline. New defects come from the library.
+
+| Patches (rejected) | Kept | Too small | Overlapped | Cut by border | Not on plain hull | Glare or murky | Out of range |
+|---|---|---|---|---|---|---|---|
+| Corrosion | 121 | 153 | 95 | 17 | 13 | 9 | 5 |
+| Coating damage | 938 | 1,074 | 522 | 81 | 124 | 204 | 51 |
+| Biofouling | 411 | 300 | 663 | 234 | 122 | 64 | 42 |
+
+Limits: the haze in front of a patch, glare and the 3-D relief of fouling stay in it, painted
+flat. Their ships' paint is divided out, so a patch on a paint unlike theirs carries their
+contrast, not its own. LIACi has no scale, so sizes come from the configured ranges. Patches, and
+every hull painted with them, are adaptations of LIACi under CC BY-NC-SA 4.0: they stay in `runs/`,
+out of the repository and CI.
+
+#### Deep segmenter
+
+[`segmenter.py`](src/auvinspect/segmenter.py) (the `learn` extra) assigns a class to every pixel.
+- **Encoder.** Torchvision's MobileNetV2 with its ImageNet weights. The 13.6 MB file is downloaded
+  by hand and checked against its SHA-256; the code never downloads anything.
+- **Decoder.** A light decoder merges the encoder's stride-8, -16 and -32 features.
+- **Training.** 320x240 input, horizontal flips, brightness and contrast jitter, class-weighted
+  cross-entropy, 20 epochs of AdamW. The epoch kept is the one with the best mean AP on the
+  validation splits. An epoch over LIACi's training images takes about 75 s on this machine's CPU.
+- **Scoring.** For the perception referee, each connected region of a class becomes a box, scored
+  by its mean probability. Pixel IoU is counted against the masks.
+
+Boxes understate a segmenter on LIACi. Neighbouring paint flakes merge into one region, which then
+faces several drawn polygons. Pixel IoU is the fairer measure there.
+
+On a recorded run, `segment --run` gives detections for the map and report.
+
+Mean pixel IoU over corrosion, coating damage, biofouling and anodes on each test split (one run
+each, seed 0):
+
+| Trained on | LIACi test (real) | Simulated, procedural defects | Simulated, real defects |
+|---|---|---|---|
+| LIACi | **0.29** | 0.19 | 0.14 |
+| Simulated, procedural defects | 0.05 | **0.78** | 0.22 |
+| Simulated, real defects | 0.03 | 0.35 | **0.51** |
+| LIACi + simulated, real defects | **0.29** | 0.38 | 0.48 |
+
+The simulated datasets are the 14 hulls of the perception dataset (7 train, 2 val, 5 test), red-brown
+paint, kinematic survey frames. Its procedural and real-defect versions share seeds, so hulls,
+anodes and cracks are the same.
+
+On LIACi's test images, the LIACi model scores per class:
+
+| LIACi test | Corrosion | Coating damage | Biofouling | Anodes |
+|---|---|---|---|---|
+| Pixel IoU | 0.11 | 0.26 | 0.48 | 0.32 |
+| Box AP | 0.01 | 0.05 | 0.09 | 0.41 |
+
+Its box mAP is 0.14, with 3.0 false alarms per frame. These numbers are not comparable with the
+LIACi paper's: the classes, splits and resolution differ.
+
+What this shows:
+- **Simulation alone does not transfer to real images,** with procedural or with real defects (IoU
+  0.05 and 0.03 on LIACi). Real patches change the defects. The rest of a LIACi frame is still
+  unlike the simulator's: cameras and lamps, haze, ship structures, propellers and sea chests, and
+  the framing of a piloted ROV.
+- **Procedural defects are easy.** The procedural model scores 0.78 on them, but 0.22 on the same
+  hulls with real defects. Hulls with real defects are the harder test. The model trained on them
+  is also the more general (0.35 on procedural defects).
+- **One model can serve both.** Training on LIACi and on hulls with real defects together keeps
+  LIACi's score (0.29) and nearly keeps the simulator's (0.48).
+
+In the full pipeline, the segmenter replaces the classical detector; the map, multi-view
+confirmation and referee are unchanged. On the `ci` suite's two 8 m hulls (one red-brown, one
+black; 29 findable defects):
+
+| Confirmed findings: recall / precision / false per hull | Procedural defects | Real defects |
+|---|---|---|
+| Classical baseline with the region classifier | 0.83 / 0.89 / 1.5 | 0.21 / 0.50 / 2.5 |
+| Segmenter, simulated procedural defects | **0.93 / 0.93 / 1.0** | 0.38 / 0.31 / 11.0 |
+| Segmenter, simulated real defects | 0.45 / 0.39 / 8.5 | **0.62** / 0.58 / 6.0 |
+| Segmenter, LIACi + simulated real defects | 0.45 / 0.57 / 5.0 | 0.55 / **0.62** / 4.5 |
+
+Two hulls give no interval, and the segmenters never saw black paint or mission frames. The map's
+settings were tuned with the classical detector. Each detector does best on the defects it was
+trained on. Real defects take the classical pipeline from 0.83 to 0.21 recall, a gap the procedural
+hulls hid. The `ci` gate keeps procedural defects and the classical detector, because LIACi-derived
+hulls and models cannot go into CI. Trained models stay in `runs/models/`: those trained on LIACi
+or on hulls with real defects are adaptations of LIACi (CC BY-NC-SA 4.0).
 
 ### Defect map, anode stations and report (milestone 4)
 
@@ -447,7 +556,20 @@ The real LIACi images, downloaded from <https://liaci.sintef.cloud> (`data.zip`,
 unpacked outside the repository:
 
 ```bash
-.venv/bin/auvinspect import-liaci --root ~/datasets/liaci/LIACi_dataset_pretty --out runs/liaci
+.venv/bin/auvinspect import-liaci  --root ~/datasets/liaci/LIACi_dataset_pretty --out runs/liaci
+.venv/bin/auvinspect liaci-patches --root ~/datasets/liaci/LIACi_dataset_pretty --out runs/liaci_patches
+.venv/bin/auvinspect generate --seed 7 --patches runs/liaci_patches --out runs/s7_real   # real defects
+```
+
+The deep segmenter (the `learn` extra) needs torchvision's MobileNetV2 ImageNet weights
+(`mobilenet_v2-7ebf99e0.pth`, 13.6 MB, from
+<https://download.pytorch.org/models/mobilenet_v2-7ebf99e0.pth>), checked against
+`segmenter.backbone_sha256`. Nothing is downloaded by the code:
+
+```bash
+.venv/bin/auvinspect train-segmenter --dataset runs/liaci --backbone ~/models/mobilenet_v2-7ebf99e0.pth --out runs/models/seg.pt
+.venv/bin/auvinspect segment  --model runs/models/seg.pt --dataset runs/liaci --split test --out runs/liaci/seg_test.json
+.venv/bin/auvinspect evaluate --dataset runs/liaci --detections runs/liaci/seg_test.json --split test
 ```
 
 Defect map and inspection report for a run (detections keyed by frame name; default: the baseline):
@@ -575,6 +697,15 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
   near-duplicates left out, the class mapping with other categories as background, resizing,
   smaller objects drawn on top, small objects not required, perfect detections scoring full marks,
   the baseline refusing real images;
+- real defects in the simulator (same stand-in, defects of known reflectance under a lamp falling
+  off across the image): only whole defects on plain hull from the training split kept, the paint
+  and the lamp divided out, the library's digest repeatable; a hull painted with them repeatable,
+  its labels the painted patches, the paint under a patch times its reflectance, procedural hulls'
+  digests unchanged; evolution needing the same library, keeping old pixels and growing a patch
+  from its own texture;
+- deep segmenter (a randomly initialised encoder in place of the ImageNet weights): regions to
+  boxes and scores, the best validation epoch kept, the model reloading, the weights' digest
+  enforced;
 - missions: nominal (full coverage, no false claims, no contact, hull-end fixes on every lane);
   blackout and turbidity holes found and revisited; DVL dropout with and without hull-end fixes,
   never over-claimed; the faults the vehicle absorbs (stuck depth caught by the frozen-value check,
@@ -590,7 +721,9 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 3. Perception: pretrained models (depth, segmentation, features) and a fine-tuned defect detector,
    scored against the ground truth per class and per size. *Done so far: datasets, the perception
    referee, a classical baseline, a learned region classifier (numpy) trained on hulls of every
-   paint, the import of the real LIACi images. A deep detector (PyTorch) is not built yet.*
+   paint, the import of the real LIACi images, real LIACi defects painted on simulated hulls, and
+   a deep segmenter (ImageNet-pretrained MobileNetV2) scored on real and simulated images and in
+   the hull pipeline.*
 4. ~~Defect map and report: defects placed on the hull with sizes and evidence frames; a second
    survey with grown defects for change detection; inspector review.~~ The map with multi-view
    confirmation and its referee, anode stations checked against the hull plan, the photomosaic
@@ -605,8 +738,10 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 ## Limitations
 
 - Simulation only. Numbers describe this simulator and must not be read as real-world performance.
-- Defect appearance in the simulator is procedural. Real images (LIACi) are imported for learned
-  models, but they are few, from a few inspections, and not ship-disjoint between training and test.
+- Defect appearance in the simulator is procedural, or cut from LIACi's real images (corrosion,
+  coating damage, fouling; cracks and missing anodes stay procedural). Real patches do not make
+  the rest of the image real: a segmenter trained only on simulated hulls fails on LIACi's images.
+  LIACi itself is small, from a few inspections, and not ship-disjoint between training and test.
 - The detector's hand-written class rules were written for red-brown paint (on black paint they
   take fouling for corrosion); the region classifier, trained on all three paints, replaced them.
   Paints it has not seen are untested.

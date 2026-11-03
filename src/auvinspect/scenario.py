@@ -4,6 +4,8 @@ A scenario is the hull geometry, its appearance texture, a label raster (one ite
 pixel, -1 for sound paint) and the item list: painted defects (corrosion, coating damage,
 biofouling, cracks, missing-anode footprints) and anodes, which are 3-D geometry (intact or
 depleted). Areas, positions and sizes come from the masks and the analytic hull, so they are exact.
+Corrosion, coating damage and biofouling are drawn procedurally, or taken from a library of real
+defects (patches.py) when one is given.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ from PIL import Image
 
 from . import config as config_mod
 from .hull import HullGeometry, anode_stations
+from .patches import PAINTED, Library
 from .rng import stream
 from .texture import blob_mask, crack_mask, disc, erode, polygon_mask, value_noise
 
@@ -36,6 +39,7 @@ class Scenario:
     items: list[dict] = field(default_factory=list)
     features: list[dict] = field(default_factory=list)   # benign distractors (sea chests)
     lineage: dict | None = None    # for an evolved hull: the base scenario's digest, months and growth rates
+    patch_library: dict | None = None   # for a hull painted with real defects: the library's digest and source
 
     @property
     def mm_per_px(self) -> float:
@@ -60,6 +64,7 @@ class Scenario:
             'config_sha256': config_mod.digest(config_mod.world(self.cfg)),
             'config': config_mod.world(self.cfg),
             **({'lineage': self.lineage} if self.lineage else {}),
+            **({'patch_library': self.patch_library} if self.patch_library else {}),
         }
 
     def digest(self) -> str:
@@ -84,20 +89,22 @@ class Scenario:
         labels = np.load(os.path.join(path, 'labels.npz'))['labels']
         cfg = config_mod.merge_world(run_cfg or config_mod.load(), spec['config'])
         scn = cls(spec['seed'], cfg, HullGeometry(**spec['hull']), texture, labels,
-                  spec['items'], spec['features'], spec.get('lineage'))
+                  spec['items'], spec['features'], spec.get('lineage'), spec.get('patch_library'))
         if 'digest' in spec and scn.digest() != spec['digest']:
             raise ValueError(f'scenario at {path} does not match its recorded digest')
         return scn
 
 
-def generate(seed: int, cfg: dict) -> Scenario:
+def generate(seed: int, cfg: dict, library: Library | None = None) -> Scenario:
+    """The scenario of a seed; with a patch library, its corrosion, coating damage and biofouling are real defects."""
     config_mod.validate(cfg)
-    return _Builder(seed, cfg).build()
+    return _Builder(seed, cfg, library).build()
 
 
 class _Builder:
-    def __init__(self, seed: int, cfg: dict):
-        self.seed, self.cfg = seed, cfg
+    def __init__(self, seed: int, cfg: dict, library: Library | None = None):
+        self.seed, self.cfg, self.library = seed, cfg, library
+        self._rel, self._patch_id = None, None              # the real defect drawn by _shape, for _paint_defect and _record
         self.hull = HullGeometry.from_config(cfg)
         self.px = cfg['hull']['texture_mm_per_px'] / 1000.0
         self.rows, self.cols = math.ceil(self.hull.girth / self.px), math.ceil(self.hull.length / self.px)
@@ -121,7 +128,8 @@ class _Builder:
             self._defects(name)
         self._slime()
         tex = (np.clip(self.tex, 0, 1) * 255 + 0.5).astype(np.uint8)
-        return Scenario(self.seed, self.cfg, self.hull, tex, self.labels, self.items, self.features)
+        return Scenario(self.seed, self.cfg, self.hull, tex, self.labels, self.items, self.features,
+                        patch_library=self.library.info(self.cfg) if self.library else None)
 
     # ---------------------------------------------------------------- appearance
     def _paint_base(self) -> np.ndarray:
@@ -230,12 +238,16 @@ class _Builder:
     def _shape(self, name: str, rng) -> np.ndarray:
         d = self.cfg['defects']
         c = d[name]
+        self._rel, self._patch_id = None, None
         aspect = rng.uniform(*d['aspect'])
         if name == 'crack':
             self._crack_len = rng.uniform(*c['length_m'])
             return crack_mask(self.m2px(self._crack_len), self.m2px(rng.uniform(*c['width_mm']) / 1000),
                               self.m2px(c['step_m']), math.radians(c['turn_std_deg']), rng)
         area = math.exp(rng.uniform(*np.log(c['area_m2']))) / self.px ** 2
+        if self.library is not None and name in PAINTED:
+            mask, self._rel, self._patch_id = self.library.draw(name, area, rng, self.cfg)
+            return mask
         if name == 'coating_damage':
             return polygon_mask(area, aspect, int(rng.integers(d['polygon_vertices'][0], d['polygon_vertices'][1] + 1)),
                                 d['blob_irregularity'], rng)
@@ -257,7 +269,10 @@ class _Builder:
         c = self.cfg['defects'][name]
         block = self.tex[r0:r0 + mask.shape[0], c0:c0 + mask.shape[1]]
         rgb = np.asarray(c['rgb'], np.float32)
-        if name in ('corrosion', 'biofouling'):
+        if self._rel is not None:                           # a real defect: its relative reflectance over the paint
+            block[mask] *= self._rel[mask]
+            self._rel = None
+        elif name in ('corrosion', 'biofouling'):
             mot = 1.0 + c['mottle'] * value_noise(mask.shape, max(2.0, self.m2px(c['scale_m'])), rng)
             block[mask] = (rgb[None, None, :] * mot[..., None])[mask]
             if name == 'biofouling':
@@ -295,6 +310,9 @@ class _Builder:
             'centroid_xs': _r([xc, sc]),
             'centroid_world': _r(self.hull.point(xc, sc).tolist()),
         }
+        if self._patch_id is not None:
+            item['patch'] = self._patch_id
+            self._patch_id = None
         self.items.append(item)
         return item
 

@@ -13,7 +13,9 @@ evolved hull has its own digest:
                      depleted one falls off with 1 - (1 - detach_per_month)^months and leaves a
                      missing-anode footprint under the same item id
 Painting reuses the generator's appearance code, and the slime film is laid over the new pixels as it
-lies over the rest of the hull. Old pixels are untouched.
+lies over the rest of the hull. Old pixels are untouched. A hull painted with real defects (patches.py)
+evolves with the same patch library: new defects come from it, and a real defect grows by continuing
+its own texture, each new pixel copying the pixel mirrored across the old outline (slime included).
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage
 
+from .patches import Library
 from .rng import stream
 from .scenario import Scenario, _Builder, _r
 from .texture import value_noise
@@ -32,8 +35,8 @@ GROWING = ('corrosion', 'coating_damage', 'biofouling')
 
 
 class _Evolver(_Builder):
-    def __init__(self, scn: Scenario, months: float, ecfg: dict):
-        super().__init__(scn.seed, scn.cfg)
+    def __init__(self, scn: Scenario, months: float, ecfg: dict, library: Library | None = None):
+        super().__init__(scn.seed, scn.cfg, library)
         self.scn, self.months, self.e = scn, months, ecfg
         self.tex = scn.texture.astype(np.float32) / 255.0
         self.labels = scn.labels.copy()
@@ -51,7 +54,7 @@ class _Evolver(_Builder):
             if 'bbox_xs' in f:
                 x0, s0, x1, s1 = f['bbox_xs']
                 self.occupied[int(self.m2px(s0)):int(self.m2px(s1)), int(self.m2px(x0)):int(self.m2px(x1))] = True
-        self.changed = np.zeros(self.labels.shape, bool)
+        self.changed = np.zeros(self.labels.shape, bool)              # newly painted pixels, still without the slime film
 
     def rng(self, what: str) -> np.random.Generator:
         return stream(self.seed, f'evolve:{self.months:g}:{what}')
@@ -92,6 +95,11 @@ class _Evolver(_Builder):
         if not new.any():
             return
         r0, c0 = win[0].start, win[1].start
+        if 'patch' in it:
+            self._continue(self.tex[win], mask, new)
+            self.labels[win][new] = iid
+            self.occupied[win] |= new
+            return
         self._paint_defect(name, r0, c0, new, rng)
         if name == 'coating_damage':                            # the flaking edge moves out with the outline
             c = self.cfg['defects'][name]
@@ -100,6 +108,17 @@ class _Evolver(_Builder):
         self.labels[win][new] = iid
         self.occupied[win] |= new
         self.changed[win] |= new
+
+    @staticmethod
+    def _continue(block: np.ndarray, mask: np.ndarray, new: np.ndarray):
+        """New pixels of a real defect copy the pixel mirrored across the old outline (its nearest
+        outline pixel when the mirror image falls outside the old mask)."""
+        near = ndimage.distance_transform_edt(~mask, return_indices=True)[1]
+        rr, cc = np.nonzero(new)
+        qr, qc = near[0][rr, cc], near[1][rr, cc]
+        mr, mc = np.clip(2 * qr - rr, 0, mask.shape[0] - 1), np.clip(2 * qc - cc, 0, mask.shape[1] - 1)
+        inside = mask[mr, mc]
+        block[rr, cc] = block[np.where(inside, mr, qr), np.where(inside, mc, qc)]
 
     def grow_crack(self, it: dict, rng):
         iid = it['id']
@@ -189,7 +208,8 @@ class _Evolver(_Builder):
         self._slime_over(self.changed)
         tex = (np.clip(self.tex, 0, 1) * 255 + 0.5).astype(np.uint8)
         lineage = {'base_digest': self.scn.digest(), 'months': self.months, 'evolution': copy.deepcopy(self.e)}
-        return Scenario(self.seed, self.cfg, self.hull, tex, self.labels, self.items, self.features, lineage)
+        return Scenario(self.seed, self.cfg, self.hull, tex, self.labels, self.items, self.features, lineage,
+                        self.scn.patch_library)
 
     def _slime_over(self, where: np.ndarray):
         """The scenario's slime film (same draws as the generator) over newly painted pixels only."""
@@ -201,9 +221,14 @@ class _Evolver(_Builder):
         self.tex[where] = self.tex[where] * (1 - w) + np.asarray(a['slime_rgb'], np.float32) * w
 
 
-def evolve(scn: Scenario, months: float, cfg: dict) -> Scenario:
-    """The scenario's hull `months` later (see module notes); run settings are taken from cfg."""
-    return _Evolver(scn, months, cfg['evolution']).evolve()
+def evolve(scn: Scenario, months: float, cfg: dict, library: Library | None = None) -> Scenario:
+    """The scenario's hull `months` later (see module notes); run settings are taken from cfg. A hull
+    painted with real defects needs the library it was painted from."""
+    want = (scn.patch_library or {}).get('library_sha256')
+    if want != (library.digest if library else None):
+        raise ValueError('this hull was painted procedurally: evolve it without a patch library' if want is None else
+                         f'this hull was painted from patch library {want[:12]}: evolve it with that library')
+    return _Evolver(scn, months, cfg['evolution'], library).evolve()
 
 
 def changes(base: Scenario | dict, later: Scenario | dict, growth_ratio: float) -> dict:

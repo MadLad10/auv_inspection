@@ -54,10 +54,11 @@ def _settings_digest(cfg: dict) -> str:
     return hashlib.sha256(json.dumps(run, sort_keys=True).encode()).hexdigest()
 
 
-def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict | None = None, rescore: bool = False) -> dict:
+def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict | None = None, rescore: bool = False,
+             library=None) -> dict:
     """One hull of a suite, end to end. Its result is kept in <out_root>/s<seed>/result.json and reused
     when present; with rescore, the flown mission is kept and detection, map, stations and report are
-    redone (after a change to them)."""
+    redone (after a change to them). With a patch library (patches.Library), the hull carries real defects."""
     from .mission import run as fly
     d = os.path.join(out_root, f's{seed}')
     path = os.path.join(d, 'result.json')
@@ -69,10 +70,10 @@ def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict |
     if os.path.exists(os.path.join(mdir, 'coverage.json')):
         with open(os.path.join(d, 'scenario.json')) as f:
             digest = json.load(f)['digest']
-        if digest != generate(seed, wcfg).digest():
+        if digest != generate(seed, wcfg, library).digest():
             raise ValueError(f'{d}: the saved scenario is not this hull of the suite; remove it to fly again')
     else:
-        scn = generate(seed, wcfg)
+        scn = generate(seed, wcfg, library)
         digest = scn.save(d)
         fly(scn, mdir)
     det_model = detector.load_model(wcfg)
@@ -91,6 +92,7 @@ def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict |
                 'per_class': {c: {'required': x['required'], 'found': x['found'], 'false': x['false']} for c, x in v['per_class'].items()}}
     st = m['stations']
     result = {'seed': seed, 'suite': suite_name, 'world': drawn, 'scenario_digest': digest,
+              **({'patch_library_sha256': library.digest} if library else {}),
               'coverage': cov['coverage_fraction'], 'claimed': cov['claimed']['fraction'],
               'false_claim': cov['claimed']['false_claim_fraction'], 'aborted': cov['aborted'],
               'contact_ticks': cov['contacts']['ticks'], 'sim_time_s': cov['sim_time_s'],
