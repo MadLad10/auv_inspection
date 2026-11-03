@@ -9,8 +9,8 @@ by its own claims.
 6-DOF vehicle dynamics with added mass and contact, Jaffe-McGlamery underwater image formation with
 a photon-counting camera, and a contrast-to-noise coverage criterion. Milestone 3 (perception) has
 its dataset exporter, perception referee, a classical baseline and a learned region classifier
-(numpy, no downloads) trained on hulls of every paint; a deep detector (PyTorch, the `learn`
-extra) is not built yet. Milestone 4 has the defect map, anode stations checked against the hull
+(numpy, no downloads) trained on hulls of every paint, and imports the real LIACi inspection
+images for scoring and training; a deep detector (PyTorch, the `learn` extra) is not built yet. Milestone 4 has the defect map, anode stations checked against the hull
 plan, the inspection report with review statuses, the hull months later (grown and new defects,
 aged anodes) and change detection between two surveys. Milestone 5 has the benchmark and CI that
 gates on it.
@@ -153,6 +153,50 @@ red-brown paint the classifier mostly wins on what the rules confused (coating d
 missing-anode footprints) and gives up a little on corrosion and fouling; on other paints it is
 far ahead (see the [benchmark](#benchmark)). Anodes, 3-D fittings whose sides change their outline,
 are checked differently, at the stations of the hull plan (below).
+
+#### Real images: LIACi
+
+The simulator's defects are procedural. To measure perception on real hulls, the pipeline reads
+[LIACi](https://liaci.sintef.cloud): 1,893 images from ROV inspections of ships, with polygons
+drawn by inspection experts in ten categories. LIACi is licensed
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) (non-commercial,
+share-alike) and is **not part of this repository**. Download it from its site and cite:
+
+> M. Waszak, A. Cardaillac, B. Elvesæter, F. Rødølen, M. Ludvigsen, "Semantic Segmentation in
+> Underwater Ship Inspections: Benchmark and Data Set", *IEEE Journal of Oceanic Engineering*
+> 48(2), 462-473, 2023. doi:10.1109/JOE.2022.3219129
+
+`import-liaci` ([`liaci.py`](src/auvinspect/liaci.py)) writes LIACi in the dataset format above, so
+the perception referee scores real and simulated images alike:
+
+- **Splits.** LIACi's official split: 1,370 train and 191 test images. Of the training images,
+  those in every 7th block of 50 consecutive image numbers are held out for validation (192
+  images), since neighbouring images come from one video. The 332 images LIACi marks *not used* (near-duplicates) are left out.
+- **Classes.** Corrosion, paint peel (coating damage), marine growth (biofouling) and anodes. LIACi
+  has no cracks or missing anodes; its `defect` (mechanical damage, mostly on propellers), hull,
+  propeller, bilge keel, sea chest grating and overboard valve categories are background.
+- **Masks from the polygons**, smaller objects on top. LIACi's own per-class bitmaps hold one label
+  per pixel: in 4% of class-and-image pairs they differ from the polygons. In the cases checked, the
+  difference lies under another category drawn over it, for example corrosion on a propeller hub
+  lost under the propeller; one image (`image_0205`) disagrees outright.
+- **Resolution.** Images (640x480, 1280x720 and 1920x1080) are resized to 640 pixels wide, the
+  simulator's camera width. Every object with 50 pixels or more is required: there are no
+  coverage limits or physical sizes on a real image.
+
+| Required objects (images) | Train | Val | Test | Median share of the image |
+|---|---|---|---|---|
+| Corrosion | 406 (127) | 55 (28) | 66 (23) | 0.37% (simulated: 0.41%) |
+| Coating damage (paint peel) | 2,938 (554) | 369 (83) | 545 (95) | 0.25% (0.69%) |
+| Biofouling (marine growth) | 1,834 (511) | 210 (75) | 338 (80) | 1.1% (3.5%) |
+| Anode | 564 (337) | 115 (69) | 79 (52) | 0.57% (1.0%) |
+
+What these images can and cannot say: they are real hulls, cameras and water, unlike the
+simulator. But they come from a few inspections whose ships are not identified, the test images
+come from the same inspections as the training images (LIACi only removed near-duplicates; a test
+image is as similar to its nearest training image as training images are to each other), and many
+show propellers, sea chests and valves rather than hull plating. Scores on them are scores on
+LIACi's images, not field performance. The classical baseline does not run on them: it needs a
+recorded run's paint reference and the hull's paint. They are for learned models.
 
 ### Defect map, anode stations and report (milestone 4)
 
@@ -399,6 +443,13 @@ scenario directory):
 .venv/bin/auvinspect evaluate --dataset runs/dataset --detections runs/dataset/baseline_test.json --split test
 ```
 
+The real LIACi images, downloaded from <https://liaci.sintef.cloud> (`data.zip`, 1.0 GB) and
+unpacked outside the repository:
+
+```bash
+.venv/bin/auvinspect import-liaci --root ~/datasets/liaci/LIACi_dataset_pretty --out runs/liaci
+```
+
 Defect map and inspection report for a run (detections keyed by frame name; default: the baseline):
 
 ```bash
@@ -520,6 +571,10 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
   precision on known cases; dataset objects against the per-pixel ground truth; the baseline
   rejecting weld seams, finding fouling that fills most of a frame (with the paint reference) and
   finding corrosion on the test hull;
+- LIACi import (on a stand-in with LIACi's layout): the official split with validation blocks and
+  near-duplicates left out, the class mapping with other categories as background, resizing,
+  smaller objects drawn on top, small objects not required, perfect detections scoring full marks,
+  the baseline refusing real images;
 - missions: nominal (full coverage, no false claims, no contact, hull-end fixes on every lane);
   blackout and turbidity holes found and revisited; DVL dropout with and without hull-end fixes,
   never over-claimed; the faults the vehicle absorbs (stuck depth caught by the frozen-value check,
@@ -535,7 +590,7 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 3. Perception: pretrained models (depth, segmentation, features) and a fine-tuned defect detector,
    scored against the ground truth per class and per size. *Done so far: datasets, the perception
    referee, a classical baseline, a learned region classifier (numpy) trained on hulls of every
-   paint. A deep detector (PyTorch) is not built yet.*
+   paint, the import of the real LIACi images. A deep detector (PyTorch) is not built yet.*
 4. ~~Defect map and report: defects placed on the hull with sizes and evidence frames; a second
    survey with grown defects for change detection; inspector review.~~ The map with multi-view
    confirmation and its referee, anode stations checked against the hull plan, the photomosaic
@@ -550,8 +605,8 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 ## Limitations
 
 - Simulation only. Numbers describe this simulator and must not be read as real-world performance.
-- Defect appearance is procedural until real defect imagery (for example a public hull-inspection
-  dataset) is added.
+- Defect appearance in the simulator is procedural. Real images (LIACi) are imported for learned
+  models, but they are few, from a few inspections, and not ship-disjoint between training and test.
 - The detector's hand-written class rules were written for red-brown paint (on black paint they
   take fouling for corrosion); the region classifier, trained on all three paints, replaced them.
   Paints it has not seen are untested.

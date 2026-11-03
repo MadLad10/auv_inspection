@@ -186,6 +186,10 @@ def _validate_mission(cfg: dict) -> None:
     _check(d['context_px'] >= 1 and 0 < d['min_label_share'] <= 1 and all(n >= 1 for n in d['hidden']) and d['iterations'] >= 1
            and d['learning_rate'] > 0 and d['l2'] >= 0 and 0 <= d['class_weight_power'] <= 1,
            'detector: context_px >= 1, min_label_share in (0, 1], hidden sizes >= 1, iterations >= 1, rates and powers in range')
+    lq = cfg['real_images']['liaci']
+    _check(lq['width'] >= 32 and lq['val_block'] >= 1 and lq['val_every'] >= 2
+           and set(lq['classes'].values()) <= set(cfg['perception']['classes']),
+           'real_images.liaci: width >= 32, val_block >= 1, val_every >= 2, classes mapped to perception.classes')
     st = cfg['stations']
     _check(st['window_margin_m'] >= 0 and st['glare_margin_m'] >= 0 and st['max_distance2'] > 0 and set(st['classes']) <= set(cfg['perception']['classes']),
            'stations: window_margin_m >= 0, classes among perception.classes')

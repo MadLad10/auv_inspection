@@ -49,6 +49,11 @@ def _dataset(a):
     print(json.dumps(export(a.run, a.out, config_mod.load(a.config)), indent=1))
 
 
+def _import_liaci(a):
+    from .liaci import import_dataset
+    print(json.dumps(import_dataset(a.root, a.out, config_mod.load(a.config)), indent=1))
+
+
 def _detect(a):
     from .baseline import run
     det = run(a.dataset, config_mod.load(a.config), a.split)
@@ -224,6 +229,11 @@ def main(argv=None):
     d.add_argument('--out', required=True)
     d.add_argument('--config', help='YAML run settings merged over the defaults')
     d.set_defaults(fn=_dataset)
+    q = sub.add_parser('import-liaci', help='import the LIACi images of real ship inspections as a perception dataset')
+    q.add_argument('--root', required=True, help='the unpacked LIACi_dataset_pretty directory')
+    q.add_argument('--out', required=True)
+    q.add_argument('--config', help='YAML settings merged over the defaults')
+    q.set_defaults(fn=_import_liaci)
     t = sub.add_parser('detect', help='run the classical baseline detector over a dataset')
     t.add_argument('--dataset', required=True)
     t.add_argument('--out', required=True, help='detections JSON')

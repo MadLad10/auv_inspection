@@ -248,6 +248,18 @@ perception:                    # datasets from recorded frames and the scoring o
   score_threshold: 0.5         # detections at or above this score are reported as findings
   splits: [0.7, 0.15, 0.15]    # train / val / test shares, assigned per scenario seed
 
+real_images:                   # public imagery of real inspections, imported as perception datasets (liaci.py)
+  liaci:                       # SINTEF LIACi, CC BY-NC-SA 4.0: not in this repository (see README)
+    width: 640                 # images resized to the simulator's camera width
+    classes:                   # LIACi category -> perception class; the other categories are background
+      corrosion: corrosion
+      paint_peel: coating_damage
+      marine_growth: biofouling
+      anode: anode
+    val_block: 50              # official training images, in file order, in blocks of this many ...
+    val_every: 7               # ... of which every 7th block is held out for validation (one video's
+                               # neighbouring frames stay on one side)
+
 mapping:                       # findings on the hull map, fused across frames, and their scoring
   samples_per_box: 7           # rays per side of a detection box cast onto the hull
   merge_overlap: 0.5           # a view joins a finding when it and one of its views overlap this share of the smaller ...

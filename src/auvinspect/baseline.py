@@ -225,6 +225,9 @@ def run(dataset_dir: str, cfg: dict, split: str | None = None, model: dict | Non
     with open(os.path.join(dataset_dir, 'annotations.json')) as f:
         ann = json.load(f)
     fids = ann['splits'][split] if split else list(ann['frames'])
+    if any('run' not in ann['frames'][fid] for fid in fids):
+        raise ValueError('the classical baseline needs recorded runs (a paint reference from the run, the hull paint '
+                         'from its scenario); this dataset has frames without one (real images)')
     by_run: dict[str, list[str]] = {}
     for fid in fids:
         by_run.setdefault(ann['frames'][fid]['run'], []).append(fid)
