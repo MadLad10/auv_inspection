@@ -193,7 +193,8 @@ def summarize(out_root: str, suite_name: str, cfg: dict) -> dict:
                              'false_confirmed': r['map']['confirmed']['false'],
                              'stations': f"{r['stations']['correct']}/{r['stations']['inspected']}/{r['stations']['stations']}"}
                             for r in results],
-               'versions': sorted({json.dumps(r['versions'], sort_keys=True) for r in results})}
+               'versions': sorted({json.dumps(r['versions'], sort_keys=True) for r in results}),
+               'patch_libraries': sorted({r.get('patch_library_sha256') or 'procedural' for r in results})}
     summary['versions'] = [json.loads(v) for v in summary['versions']]
     return summary
 

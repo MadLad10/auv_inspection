@@ -212,6 +212,13 @@ def _validate_mission(cfg: dict) -> None:
     _check(0 < lo <= hi and bm['world']['paint_rgb'] and all(len(c) == 3 and min(c) >= 0 and max(c) <= 1 for c in bm['world']['paint_rgb'])
            and bm['bootstrap'] >= 100 and 0 < bm['interval'] < 1 and bm['min_hulls_for_interval'] >= 2 and all(s['seeds'] for s in bm['suites'].values()),
            'benchmark: visibility range positive, paints RGB in [0, 1], bootstrap >= 100, interval in (0, 1), suites with seeds')
+    rg = cfg['registry']
+    _check(isinstance(rg['root'], str) and rg['root'] and set(rg['promotion']) == {'region_classifier', 'anode_stations', 'segmenter'}
+           and all(r['suite'] in bm['suites'] and isinstance(r['real_defects'], bool)
+                   and all(isinstance(v, (int, float)) for v in list(r['min'].values()) + list(r['max'].values()))
+                   for r in rg['promotion'].values()),
+           'registry: a root directory; promotion rules for region_classifier, anode_stations and segmenter, '
+           'each with a benchmark suite, real_defects true or false, and numeric min and max limits')
     ref = cfg['coverage']['reference_albedo']
     _check(ref == 'paint' or (isinstance(ref, list) and len(ref) == 3), "coverage.reference_albedo: 'paint' or an RGB triple")
     _check(isinstance(cfg['faults'], list), 'faults must be a list')

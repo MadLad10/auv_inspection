@@ -33,7 +33,7 @@ from importlib.resources import files
 import numpy as np
 from PIL import Image
 
-from . import baseline
+from . import baseline, registry
 from .rng import stream
 
 
@@ -188,6 +188,7 @@ def load_model(cfg: dict, path: str | None = None) -> dict | None:
     name = path or cfg['detector']['model']
     if name is None:
         return None
+    name = registry.resolve(name, cfg)
     text = open(name).read() if os.path.isfile(name) else files('auvinspect').joinpath('models', name).read_text()
     model = json.loads(text)
     if model['settings_sha256'] != _digest(settings(cfg)):

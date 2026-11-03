@@ -157,6 +157,35 @@ def _stations(a):
     print(json.dumps(out, indent=1))
 
 
+def _registry(a):
+    from . import registry
+    cfg = config_mod.load(a.config)
+    if a.action == 'list':
+        out = registry.listing(cfg, a.registry)
+    elif a.action == 'add':
+        if not (a.model and a.name):
+            raise ValueError('registry add: give --model and --name')
+        out = registry.add(a.model, a.name, cfg, a.registry, a.note or '')
+    else:
+        if not a.ref:
+            raise ValueError(f'registry {a.action}: name the model, <name>[@<version>]')
+        if a.action == 'show':
+            out = registry.card(a.ref, cfg, a.registry)
+        elif a.action == 'attach':
+            if not a.score:
+                raise ValueError('registry attach: give --score (a benchmark.json)')
+            out = registry.attach(a.ref, a.score, cfg, a.registry)
+        elif a.action == 'check':
+            c = registry.card(a.ref, cfg, a.registry)
+            out = {'model': f'{c["name"]}@{c["version"]}', 'promotable': not registry.promotion_failures(c, cfg),
+                   'failures': registry.promotion_failures(c, cfg)}
+        elif a.action == 'promote':
+            out = registry.promote(a.ref, cfg, a.registry)
+        else:
+            out = {'packaged': registry.package(a.ref, cfg, a.registry)}
+    print(json.dumps(out, indent=1))
+
+
 def _benchmark(a):
     from . import benchmark
     cfg = config_mod.load(a.config)
@@ -355,6 +384,16 @@ def main(argv=None):
     bm.add_argument('--missions', help="reuse the flown missions of another run of the same suite (same hulls)")
     bm.add_argument('--config', help='YAML run settings merged over the defaults')
     bm.set_defaults(fn=_benchmark)
+    rg = sub.add_parser('registry', help='versioned models: add, list, show, attach a benchmark score, check, promote, package')
+    rg.add_argument('action', choices=['add', 'list', 'show', 'attach', 'check', 'promote', 'package'])
+    rg.add_argument('ref', nargs='?', help='<name> (its production version) or <name>@<version>')
+    rg.add_argument('--model', help='add: the model file')
+    rg.add_argument('--name', help='add: the model name')
+    rg.add_argument('--note', help='add: a note on the card')
+    rg.add_argument('--score', help="attach: a benchmark summary (the suite's benchmark.json)")
+    rg.add_argument('--registry', help='the registry directory (default: registry.root)')
+    rg.add_argument('--config', help='YAML settings merged over the defaults')
+    rg.set_defaults(fn=_registry)
     v = sub.add_parser('preview', help='render the rig at one pose, or the annotated texture')
     v.add_argument('--scenario', required=True)
     v.add_argument('--out', required=True)

@@ -35,7 +35,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage
 
-from . import perception
+from . import perception, registry
 from .rng import stream
 
 IGNORE = 255
@@ -196,7 +196,7 @@ def save(model: dict, path: str):
 def load(path: str, cfg: dict):
     """The network, its record, and cfg with the model's own input settings."""
     torch = _torch()
-    blob = torch.load(path, map_location='cpu', weights_only=True)
+    blob = torch.load(registry.resolve(path, cfg), map_location='cpu', weights_only=True)
     meta = json.loads(blob['meta'])
     if meta['classes'] != list(cfg['perception']['classes']):
         raise ValueError(f'{path}: the model was trained for classes {meta["classes"]}, not perception.classes')
@@ -211,7 +211,7 @@ def load(path: str, cfg: dict):
 def load_for_benchmark(path: str, cfg: dict) -> dict:
     """A model file loaded for benchmark.run_hull: the network, its record, its input settings and its digest."""
     net, meta, run_cfg = load(path, cfg)
-    return {'net': net, 'meta': meta, 'cfg': run_cfg, 'sha256': _sha256(path)}
+    return {'net': net, 'meta': meta, 'cfg': run_cfg, 'sha256': _sha256(registry.resolve(path, cfg))}
 
 
 # ---------------------------------------------------------------------------------------------- detection

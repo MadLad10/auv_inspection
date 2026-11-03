@@ -361,5 +361,14 @@ benchmark:                     # suites of hulls, each flown as a full mission a
   interval: 0.95
   min_hulls_for_interval: 5    # fewer hulls than this get no interval: resampling two or three understates the spread
 
+registry:                      # versioned models with provenance, license, scores and stage (registry.py)
+  root: runs/registry          # outside the package: models derived from LIACi stay out of the repository
+  promotion:                   # production needs a complete score of this suite made with the version, within limits
+    region_classifier: {suite: dev, real_defects: false, min: {map_recall_confirmed: 0.75, map_precision_confirmed: 0.8},
+                        max: {false_confirmed_per_hull: 3.0}}
+    anode_stations:    {suite: dev, real_defects: false, min: {station_accuracy: 0.9}, max: {station_wrong: 0.05}}
+    segmenter:         {suite: dev, real_defects: true, min: {map_recall_confirmed: 0.6, map_precision_confirmed: 0.6},
+                        max: {false_confirmed_per_hull: 5.0}}
+
 # Fault schedule: [{type, t_start, duration (null = permanent), params}]; types in faults.py.
 faults: []

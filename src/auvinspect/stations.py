@@ -36,7 +36,7 @@ from importlib.resources import files
 import numpy as np
 from PIL import Image, ImageDraw
 
-from . import baseline
+from . import baseline, registry
 from .camera import focal_px
 from .hull import HullGeometry, anode_stations
 from .mapping import camera_pose
@@ -218,7 +218,7 @@ def train(runs: list[str], cfg: dict) -> dict:
 def load_model(cfg: dict, path: str | None = None) -> dict:
     """The station model (`path`, else stations.model: a file, or a name in the package's models
     directory), checked against the settings."""
-    name = path or cfg['stations']['model']
+    name = registry.resolve(path or cfg['stations']['model'], cfg)
     text = open(name).read() if os.path.isfile(name) else files('auvinspect').joinpath('models', name).read_text()
     model = json.loads(text)
     if model['settings_sha256'] != _digest(settings(cfg)):

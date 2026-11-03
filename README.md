@@ -484,6 +484,46 @@ against 64% of real defects found.
     --missions runs/bench/test_real --out runs/bench/test_real_seg
 ```
 
+### Model registry ([`registry.py`](src/auvinspect/registry.py))
+
+Models are registered as numbered versions in `runs/registry` (`registry.root`). Each version is a
+read-only copy of the model file and a card that records:
+- the file's SHA-256, and the identity the benchmark records for the model;
+- what it was trained on, and its settings digest;
+- its license, worked out from its training sources;
+- the benchmark scores attached to it;
+- its stage (candidate, production, archived), with a dated history.
+
+The rules:
+- **License.** A model trained on LIACi's images, or on hulls painted with LIACi's defects, is an
+  adaptation of LIACi (CC BY-NC-SA 4.0). One whose sources are no longer on disk counts as
+  unknown. Neither kind may be redistributed. Segmenters never are either: their encoder holds
+  torchvision's ImageNet weights.
+- **Scores.** A benchmark summary is attached only when every hull in it was scored with that
+  version.
+- **Promotion.** A version becomes `production` only with a complete score of the kind's promotion
+  suite (`registry.promotion`): every hull present, none aborted, on real or procedural defects as
+  configured, its values within limits. The version it replaces is archived.
+- **Use.** `registry:<name>` (the production version) or `registry:<name>@<version>` works wherever
+  a model file is taken (`detector.model`, `stations.model`, `--segmenter`, `segment --model`), and
+  the file is checked against its digest.
+- **Packaging.** `package` copies a production JSON model into the package (for the CI gate) only
+  when it may be redistributed.
+
+```bash
+.venv/bin/auvinspect registry add --model runs/models/seg_all.pt --name segmenter
+.venv/bin/auvinspect benchmark score --suite dev --out runs/bench/dev_real_seg
+.venv/bin/auvinspect registry attach segmenter@1 --score runs/bench/dev_real_seg/benchmark.json
+.venv/bin/auvinspect registry promote segmenter@1          # `registry check` lists what stops it
+.venv/bin/auvinspect benchmark run --suite test --patches runs/liaci_patches --segmenter registry:segmenter ...
+```
+
+| Registered | License | Redistributable | Promoted on (dev suite) |
+|---|---|---|---|
+| `region_classifier@1` (packaged) | this project | yes | procedural: recall 0.82, precision 0.94, 0.25 false per hull |
+| `anode_stations@1` (packaged) | this project | yes | procedural: stations 28 of 28 |
+| `segmenter@1` (`seg_all`) | CC BY-NC-SA 4.0, LIACi adaptation | no | real defects: recall 0.64, precision 0.75, 3.25 false per hull |
+
 ## Physics
 
 ### Water and light ([`optics.py`](src/auvinspect/optics.py))
@@ -736,6 +776,11 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
   boxes and scores, the best validation epoch kept, the model reloading, the weights' digest
   enforced;
 - benchmark: reused missions refused when missing or of another hull;
+- model registry: read-only versions with the benchmark's identity, the license following the
+  training sources (procedural, LIACi-derived, missing), scores refused unless made with the
+  model, promotion refused without a score, under the limits or on the wrong defects, the replaced
+  version archived, a registered model checked against its digest where it is used, packaging
+  refused for what may not be redistributed;
 - missions: nominal (full coverage, no false claims, no contact, hull-end fixes on every lane);
   blackout and turbidity holes found and revisited; DVL dropout with and without hull-end fixes,
   never over-claimed; the faults the vehicle absorbs (stuck depth caught by the frozen-value check,
@@ -763,7 +808,9 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
    containers, model registry, observability, fault injection. *Done so far: the benchmark (suites
    of hulls in varied water and paint, pooled scores with hull-resampling intervals, a gate), CI
    on GitHub Actions running the tests and the `ci` suite's gate with pinned versions, fault
-   injection in missions, models packaged with their provenance and settings digest.*
+   injection in missions, models packaged with their provenance and settings digest, a model
+   registry (versions, license from the training sources, scores made with the model, promotion
+   rules, digests checked on use).*
 6. Fleet: several vehicles sharing a structure under acoustic communication limits.
 
 ## Limitations
