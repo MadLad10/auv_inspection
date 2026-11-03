@@ -111,14 +111,19 @@ def residual(rgb: np.ndarray, cfg: dict, reference: dict | None = None) -> dict 
     return {'log': log, 'dev': dev, 'z': np.sqrt((dev ** 2).mean(-1)), 'hull': hull, 'paint': paint}
 
 
-def detect(rgb: np.ndarray, cfg: dict, reference: dict | None = None, exclude: np.ndarray | None = None) -> list[dict]:
-    """Detections in one frame; pixels in `exclude` (planned fittings) never join a detection."""
+def components(rgb: np.ndarray, cfg: dict, reference: dict | None = None, exclude: np.ndarray | None = None,
+               context_px: int = 0) -> list[dict]:
+    """Candidate regions of one frame (steps 1 to 4 before the shape rules): connected anomalies of at
+    least baseline.min_area_px not lying mostly along the hull's edge, each with its box, pixel count,
+    fill, median colour (in median deviations and in log relative to the paint), mean anomaly, share
+    of its fouling-coloured ring (for the barnacle rule) and, when context_px is given, the median log
+    colour of the hull in a ring that wide around it. Pixels in `exclude` never join a region."""
     b = cfg['baseline']
-    H, W = rgb.shape[:2]
     r = residual(rgb, cfg, reference)
     if r is None:
         return []
-    dev, z, hull = r['dev'], r['z'], r['hull']
+    dev, z, hull, log = r['dev'], r['z'], r['hull'], r['log']
+    H, W = hull.shape
     mask = hull & (z > b['threshold_mad'])
     if exclude is not None:
         mask &= ~exclude
@@ -133,31 +138,61 @@ def detect(rgb: np.ndarray, cfg: dict, reference: dict | None = None, exclude: n
     for k, sl in enumerate(ndimage.find_objects(lab), start=1):
         comp = lab[sl] == k
         area = int(comp.sum())
-        if area < b['min_area_px'] or near_edge[sl][comp].mean() > 0.5:
+        edge_share = float(near_edge[sl][comp].mean())
+        if area < b['min_area_px'] or edge_share > 0.5:
             continue
-        h, wd = sl[0].stop - sl[0].start, sl[1].stop - sl[1].start
-        dr, dg, db = np.median(dev[sl][comp], axis=0)
-        bright = (dr + dg + db) / 3
-        fill = area / (h * wd)
-        thin = min(h, wd) <= 8 or fill < 0.35
-        if bright < 0:                                            # darker than the paint
-            line = min(h, wd) <= b['seam_width_px'] and max(h, wd) >= b['seam_aspect'] * min(h, wd)
-            if line or max(h, wd) >= b['seam_length_share'] * max(H, W) or not thin:
-                continue                                          # weld seam or grating
-            cls = 'crack'
-        elif dr < 0 and dg > 0:
-            cls = 'biofouling'
-        elif _ringed_by(lab[sl] == k, fouling_colour[sl], b['barnacle_ring_px']) > 0.5:
-            continue                                              # a barnacle: part of the fouling around it
-        elif dr > 0 and dg > 0 and db < 0.4 * dg:
-            cls = 'corrosion'
-        elif fill > b['rectangle_fill']:
-            cls = 'anode' if dg > b['anode_green_mad'] else 'missing_anode'
-        else:
-            cls = 'coating_damage'
-        score = float(1 - np.exp(-z[sl][comp].mean() / b['threshold_mad']))
-        out.append({'class': cls, 'score': round(score, 4), 'box': [int(sl[1].start), int(sl[0].start), int(sl[1].stop), int(sl[0].stop)],
-                    'area_px': area})
+        c = {'box': [int(sl[1].start), int(sl[0].start), int(sl[1].stop), int(sl[0].stop)], 'area_px': area,
+             'h': sl[0].stop - sl[0].start, 'w': sl[1].stop - sl[1].start, 'edge_share': edge_share,
+             'dev': np.median(dev[sl][comp], axis=0), 'log': np.median(log[sl][comp], axis=0),
+             'z': float(z[sl][comp].mean()), 'fouling_ring': _ringed_by(comp, fouling_colour[sl], b['barnacle_ring_px']),
+             'image': (H, W), 'mask': comp}
+        c['fill'] = area / (c['h'] * c['w'])
+        if context_px:
+            big = (slice(max(0, sl[0].start - context_px), min(H, sl[0].stop + context_px)),
+                   slice(max(0, sl[1].start - context_px), min(W, sl[1].stop + context_px)))
+            own = lab[big] == k
+            ring = ndimage.binary_dilation(own, iterations=context_px) & ~own & hull[big] & ~mask[big]
+            c['context_log'] = np.median(log[big][ring], axis=0) if ring.any() else np.zeros(3)
+        out.append(c)
+    return out
+
+
+def rule_class(c: dict, b: dict) -> str | None:
+    """The hand-written class of a candidate region (step 5), or None for seams, gratings, barnacles."""
+    H, W = c['image']
+    h, wd, fill = c['h'], c['w'], c['fill']
+    dr, dg, db = c['dev']
+    bright = (dr + dg + db) / 3
+    thin = min(h, wd) <= 8 or fill < 0.35
+    if bright < 0:                                                # darker than the paint
+        line = min(h, wd) <= b['seam_width_px'] and max(h, wd) >= b['seam_aspect'] * min(h, wd)
+        if line or max(h, wd) >= b['seam_length_share'] * max(H, W) or not thin:
+            return None                                           # weld seam or grating
+        return 'crack'
+    if dr < 0 and dg > 0:
+        return 'biofouling'
+    if c['fouling_ring'] > 0.5:
+        return None                                               # a barnacle: part of the fouling around it
+    if dr > 0 and dg > 0 and db < 0.4 * dg:
+        return 'corrosion'
+    if fill > b['rectangle_fill']:
+        return 'anode' if dg > b['anode_green_mad'] else 'missing_anode'
+    return 'coating_damage'
+
+
+def detect(rgb: np.ndarray, cfg: dict, reference: dict | None = None, exclude: np.ndarray | None = None,
+           classifier=None) -> list[dict]:
+    """Detections in one frame; pixels in `exclude` (planned fittings) never join a detection. Classes
+    come from the hand-written rules, or from `classifier` (detector.Classifier: a class or none, and
+    a score, per region)."""
+    b = cfg['baseline']
+    comps = components(rgb, cfg, reference, exclude, classifier.context_px if classifier else 0)
+    if classifier is not None:
+        labelled = classifier.classify(comps)
+    else:
+        labelled = [(rule_class(c, b), float(1 - np.exp(-c['z'] / b['threshold_mad']))) for c in comps]
+    out = [{'class': cls, 'score': round(score, 4), 'box': c['box'], 'area_px': c['area_px']}
+           for c, (cls, score) in zip(comps, labelled) if cls is not None]
     return _fold_contained(out, b['containment'])
 
 
@@ -183,27 +218,34 @@ def _fold_contained(dets: list[dict], share: float) -> list[dict]:
     return kept
 
 
-def run(dataset_dir: str, cfg: dict, split: str | None = None) -> dict:
-    """Detections for every frame of a dataset (or one split), each run against its own paint reference."""
+def run(dataset_dir: str, cfg: dict, split: str | None = None, model: dict | None = None) -> dict:
+    """Detections for every frame of a dataset (or one split), each run against its own paint reference,
+    classed by the region classifier (detector.model, or `model`) for its hull's paint when there is one."""
+    from . import detector
     with open(os.path.join(dataset_dir, 'annotations.json')) as f:
         ann = json.load(f)
     fids = ann['splits'][split] if split else list(ann['frames'])
     by_run: dict[str, list[str]] = {}
     for fid in fids:
         by_run.setdefault(ann['frames'][fid]['run'], []).append(fid)
+    model = model or detector.load_model(cfg)
     out = {}
-    for run_fids in by_run.values():
+    for run, run_fids in by_run.items():
         images = {fid: np.asarray(Image.open(os.path.join(dataset_dir, ann['frames'][fid]['image'])).convert('RGB')) for fid in run_fids}
         ref = paint_reference([images[f] for f in run_fids[::cfg['baseline']['reference_stride']]], cfg)
-        out.update({fid: detect(img, cfg, ref) for fid, img in images.items()})
+        clf = detector.for_run(run, cfg, model) if model else None
+        out.update({fid: detect(img, cfg, ref, classifier=clf) for fid, img in images.items()})
     return out
 
 
-def run_frames(run_dir: str, cfg: dict, exclude: dict | None = None) -> dict:
+def run_frames(run_dir: str, cfg: dict, exclude: dict | None = None, model: dict | None = None) -> dict:
     """Detections for a recorded run's inspection-camera frames, keyed by frame name; `exclude` maps
-    frame names to masks of pixels left out (stations.window_masks)."""
+    frame names to masks of pixels left out (stations.window_masks). Classes come from the region
+    classifier (detector.model, or `model`) when there is one, else from the rules."""
+    from . import detector
+    clf = detector.for_run(run_dir, cfg, model)
     recs = [r for r in (json.loads(l) for l in open(os.path.join(run_dir, 'frames.jsonl')))
             if r['camera'] == cfg['survey']['camera'] and r.get('signal', True)]
     images = {r['frame']: np.asarray(Image.open(os.path.join(run_dir, 'frames', r['frame'] + '.png')).convert('RGB')) for r in recs}
     ref = paint_reference(list(images.values())[::cfg['baseline']['reference_stride']], cfg)
-    return {name: detect(img, cfg, ref, (exclude or {}).get(name)) for name, img in images.items()}
+    return {name: detect(img, cfg, ref, (exclude or {}).get(name), clf) for name, img in images.items()}

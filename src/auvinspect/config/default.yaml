@@ -258,11 +258,21 @@ mapping:                       # findings on the hull map, fused across frames, 
   mosaic_cell_m: 0.01          # pixel size of the report's hull photomosaic; also the grid for a finding's area
   border_px: 8                 # a detection box this close to the image border is cut by it (the patch goes on)
 
+detector:                      # learned class for the baseline's candidate regions (detector.py)
+  model: region_classifier.json   # region classifier: a file, or a name in the package's models directory; null: the rules
+  context_px: 6                # the ring around a region whose colour is its context
+  min_label_share: 0.5         # training: a region takes the class of an item covering this share of it, else none
+  hidden: [32, 32]             # ReLU layers
+  iterations: 2000             # full-batch Adam steps
+  learning_rate: 0.003
+  l2: 0.0001
+  class_weight_power: 0.5      # class weight = frequency^-power (1: fully balanced)
+
 stations:                      # anode stations from the hull plan, each checked in the frames that see it
   window_margin_m: 0.06        # the station window: the anode's plan footprint grown by this
   glare_margin_m: 0.05         # detections within this of a window are the anode's glare: left to the station check
   classes: [anode, missing_anode]   # detector classes the station check answers for; the defect map leaves them out
-  model: anode_stations.json   # trained station classifier, in the package's models directory
+  model: anode_stations.json   # trained station classifier: a file, or a name in the package's models directory
   max_distance2: 50.0          # views farther than this (median squared Mahalanobis) from the status they chose: unclear
 
 baseline:                      # classical detector: colour and brightness anomalies against the hull paint
@@ -293,8 +303,9 @@ benchmark:                     # suites of hulls, each flown as a full mission a
       seeds: [401, 402]
       overrides: {hull: {length_m: 8.0}}
       gate:                    # the pipeline is deterministic: a value moves only when the code does
-        min: {coverage: 0.99, map_recall_confirmed: 0.6, map_recall_all: 0.8, map_precision_confirmed: 0.6, station_accuracy: 0.83}
-        max: {false_claim: 0.005}
+        min: {coverage: 0.99, map_recall_confirmed: 0.75, map_recall_all: 0.85, map_precision_confirmed: 0.8,
+              recall_all_biofouling: 0.8, station_accuracy: 0.83}
+        max: {false_claim: 0.005, false_confirmed_per_hull: 3.0}
     dev:  {seeds: [201, 202, 203, 204]}                             # for tuning
     test: {seeds: [301, 302, 303, 304, 305, 306, 307, 308]}
   world:                       # each hull's water and paint, drawn from its seed

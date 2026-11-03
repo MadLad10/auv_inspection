@@ -28,7 +28,7 @@ import os
 
 import numpy as np
 
-from . import __version__, baseline, config as config_mod, optics, report, stations
+from . import __version__, baseline, config as config_mod, detector, optics, report, stations
 from .mapping import map_classes
 from .rng import stream
 from .scenario import generate
@@ -75,7 +75,8 @@ def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict |
         scn = generate(seed, wcfg)
         digest = scn.save(d)
         fly(scn, mdir)
-    det = baseline.run_frames(mdir, wcfg, stations.window_masks(mdir, wcfg))
+    det_model = detector.load_model(wcfg)
+    det = baseline.run_frames(mdir, wcfg, stations.window_masks(mdir, wcfg), det_model)
     model = model or stations.load_model(wcfg)
     report.write(mdir, det, os.path.join(d, 'report'), wcfg, model)
     with open(os.path.join(mdir, 'coverage.json')) as f:
@@ -96,7 +97,9 @@ def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict |
               'map': {'confirmed': tier('confirmed'), 'all': tier('all')},
               'stations': {k: st[k] for k in ('stations', 'inspected', 'correct', 'unclear', 'wrong', 'per_status')},
               'versions': {'auvinspect': __version__, 'run_settings_sha256': _settings_digest(cfg),
-                           'station_model_sha256': hashlib.sha256(json.dumps(model, sort_keys=True).encode()).hexdigest()}}
+                           'station_model_sha256': hashlib.sha256(json.dumps(model, sort_keys=True).encode()).hexdigest(),
+                           'detector_model_sha256': (hashlib.sha256(json.dumps(det_model, sort_keys=True).encode()).hexdigest()
+                                                     if det_model else 'rules')}}
     with open(path + '.tmp', 'w') as f:
         json.dump(result, f, indent=1)
     os.replace(path + '.tmp', path)

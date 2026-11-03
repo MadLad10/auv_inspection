@@ -71,15 +71,31 @@ def _evaluate(a):
     print(json.dumps(m, indent=1))
 
 
-def _train_stations(a):
+def _training_runs(runs: list[str], cfg: dict):
+    """Refuse runs whose hull is not in the training split."""
     from .dataset import split_of
-    from .stations import train
-    cfg = config_mod.load(a.config)
-    for run in a.run:
+    for run in runs:
         with open(os.path.join(os.path.dirname(os.path.normpath(run)), 'scenario.json')) as f:
             seed = json.load(f)['seed']
         if split_of(seed, cfg['perception']['splits']) != 'train':
             raise ValueError(f'{run}: scenario seed {seed} is not in the training split')
+
+
+def _train_detector(a):
+    from .detector import train
+    cfg = config_mod.load(a.config)
+    _training_runs(a.run, cfg)
+    model = train(a.run, cfg)
+    os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+    with open(a.out, 'w') as f:
+        json.dump(model, f)
+    print(json.dumps({'out': a.out, 'regions': model['regions'], 'hulls': len(model['trained_on'])}, indent=1))
+
+
+def _train_stations(a):
+    from .stations import train
+    cfg = config_mod.load(a.config)
+    _training_runs(a.run, cfg)
     model = train(a.run, cfg)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     with open(a.out, 'w') as f:
@@ -228,6 +244,11 @@ def main(argv=None):
     r.add_argument('--stations-model', help='anode station model JSON (default: the packaged model)')
     r.add_argument('--config', help='YAML run settings merged over the defaults')
     r.set_defaults(fn=_report)
+    td = sub.add_parser('train-detector', help='fit the region classifier of the detector on runs of training hulls')
+    td.add_argument('--run', action='append', required=True, help='a survey or mission directory of a training-split hull (repeatable)')
+    td.add_argument('--out', required=True, help='model JSON')
+    td.add_argument('--config', help='YAML run settings merged over the defaults')
+    td.set_defaults(fn=_train_detector)
     ts = sub.add_parser('train-stations', help='fit the anode station classifier on runs of training hulls')
     ts.add_argument('--run', action='append', required=True, help='a survey or mission directory of a training-split hull (repeatable)')
     ts.add_argument('--out', required=True, help='model JSON')

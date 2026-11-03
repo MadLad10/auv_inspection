@@ -182,6 +182,10 @@ def _validate_mission(cfg: dict) -> None:
     _check(m['samples_per_box'] >= 2 and 0 < m['merge_overlap'] <= 1 and m['merge_gap_m'] >= 0 and m['match_tolerance_m'] >= 0 and m['min_views'] >= 1
            and 0 <= m['confirm_support'] <= 1 and m['mosaic_cell_m'] > 0 and m['border_px'] >= 0,
            'mapping: samples_per_box >= 2, gaps and tolerances non-negative, min_views >= 1')
+    d = cfg['detector']
+    _check(d['context_px'] >= 1 and 0 < d['min_label_share'] <= 1 and all(n >= 1 for n in d['hidden']) and d['iterations'] >= 1
+           and d['learning_rate'] > 0 and d['l2'] >= 0 and 0 <= d['class_weight_power'] <= 1,
+           'detector: context_px >= 1, min_label_share in (0, 1], hidden sizes >= 1, iterations >= 1, rates and powers in range')
     st = cfg['stations']
     _check(st['window_margin_m'] >= 0 and st['glare_margin_m'] >= 0 and st['max_distance2'] > 0 and set(st['classes']) <= set(cfg['perception']['classes']),
            'stations: window_margin_m >= 0, classes among perception.classes')

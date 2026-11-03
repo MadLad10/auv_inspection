@@ -8,7 +8,8 @@ by its own claims.
 **Status:** milestones 1, 2 and 4 of 6 done, on a physically based environment: Fossen
 6-DOF vehicle dynamics with added mass and contact, Jaffe-McGlamery underwater image formation with
 a photon-counting camera, and a contrast-to-noise coverage criterion. Milestone 3 (perception) has
-its dataset exporter, perception referee and a classical baseline; learned models come next.
+its dataset exporter, perception referee, a classical baseline and a learned region classifier
+(numpy, no downloads) trained on hulls of every paint; a deep detector waits for PyTorch.
 Milestone 4 has the defect map, anode stations checked against the hull plan, the inspection
 report with review statuses, the hull months later (grown and new defects, aged anodes) and change
 detection between two surveys.
@@ -121,26 +122,36 @@ compass is disturbed.
   robust polynomial fit of log brightness removes the lamp pattern, and pixels whose colour departs
   from the paint by more than three median deviations become candidate regions. The paint colour is
   the run's own (the median over its frames), and pixels off it enter the fit with their own offset,
-  so a frame mostly covered by fouling is still measured against paint. Weld seams, gratings and the
-  water edge are rejected by shape, and classes come from the colour change against the paint and
-  the shape.
+  so a frame mostly covered by fouling is still measured against paint. The water edge is rejected
+  by shape. Classes come either from hand-written rules on the colour change against the paint and
+  the shape (weld seams and gratings rejected), or from the region classifier.
+- **Region classifier** ([`detector.py`](src/auvinspect/detector.py)). The rules were written for
+  red-brown paint; on black paint fouling is brighter than the paint in every channel and the rules
+  call it corrosion. Instead, each candidate region is described by 26 measures (its colour
+  relative to the paint, the paint's albedo, the colour around it, its anomaly, size and shape) and
+  a small ReLU network (two layers of 32, numpy) gives it a class or *none* (seams, gratings, glare,
+  noise). It is trained on 10,295 regions from the 17 training hulls (red-brown, blue and black
+  paint; `train-detector`), labelled from the per-pixel ground truth, with classes weighted towards
+  balance; packaged as `models/region_classifier.json` with its training hulls and settings
+  digest. `detector.model: null` restores the rules.
 
-On 14 seeded hulls (1,344 frames; the 5 test hulls unseen while tuning; simulation results), the
-baseline on the test split:
+On 14 seeded hulls (1,344 frames, all red-brown paint and 10 m water; the 5 test hulls unseen while
+tuning; simulation results), on the test split:
 
-| Class | AP | Precision / recall at 0.5 | Hull items found |
-|---|---|---|---|
-| Corrosion | 0.81 | 0.89 / 0.82 | 25 / 26 |
-| Coating damage | 0.30 | 0.13 / 0.62 | 13 / 13 |
-| Biofouling | 0.58 | 0.48 / 0.76 | 15 / 15 |
-| Crack | 0.02 | 0.01 / 0.25 | 4 / 6 |
-| Missing anode | 0.00 | 0.00 / 0.00 | 0 / 2 |
-| Anode | 0.01 | 0.13 / 0.06 | 6 / 33 |
+| Class | Rules: AP | Classifier: AP | Classifier: precision / recall at 0.5 | Hull items found |
+|---|---|---|---|---|
+| Corrosion | 0.81 | 0.77 | 0.85 / 0.81 | 25 / 26 |
+| Coating damage | 0.30 | 0.49 | 0.53 / 0.65 | 13 / 13 |
+| Biofouling | 0.58 | 0.50 | 0.44 / 0.74 | 15 / 15 |
+| Crack | 0.02 | 0.20 | 0.20 / 0.25 | 4 / 6 |
+| Missing anode | 0.00 | 0.83 | 0.71 / 0.83 | 2 / 2 |
+| Anode | 0.01 | 0.06 | 0.08 / 0.18 | 14 / 33 |
 
-Mean AP 0.29, 1.4 false alarms per frame. Colour-distinct defects are found; thin cracks, anodes
-(3-D fittings whose sides change their outline) and missing-anode footprints are not. This is the
-floor a learned detector has to beat. Anodes are therefore checked differently, at the stations of
-the hull plan (below).
+Mean AP 0.29 with the rules and 0.48 with the classifier; false alarms per frame 1.4 and 0.74. On
+red-brown paint the classifier mostly wins on what the rules confused (coating damage, cracks,
+missing-anode footprints) and gives up a little on corrosion and fouling; on other paints it is
+far ahead (see the [benchmark](#benchmark)). Anodes, 3-D fittings whose sides change their outline,
+are checked differently, at the stations of the hull plan (below).
 
 ### Defect map, anode stations and report (milestone 4)
 
@@ -186,10 +197,11 @@ the hull plan (below).
 Seed 7 is the development hull: the map, glare margin and change-detection settings were tuned on
 it (and on its evolved versions), so the seed-7 numbers below are optimistic; the
 [benchmark](#benchmark) scores held-out hulls. With the classical baseline on the seed-7 survey
-(simulation results): all findings cover the 19 findable defects; the 21 confirmed findings cover
-17 of them at 86% precision. Matched findings sit within 1 to 6 cm of the true centres; areas come
-out at 1.13x the truth for corrosion and 1.09x for biofouling, but 1.7x for coating damage, whose
-flaked edge the baseline overestimates.
+(simulation results), with the region classifier: all 23 findings cover 18 of the 19 findable
+defects; the 17 confirmed findings cover 16 of them, none false (with the rules: 88 findings
+covering all 19, 21 confirmed covering 17 at 86% precision). Matched findings sit within 1 to 8 cm
+of the true centres; areas come out at 1.13x the truth for corrosion and 1.02x for biofouling, but
+1.8x for coating damage, whose flaked edge the segmentation overestimates.
 
 The station model is trained on 17 hulls: the 7 red-brown training hulls of the perception dataset
 and 10 with varied water and paint (seeds 501 to 513, `generate --vary-world`; 3 red-brown, 3 blue,
@@ -221,19 +233,19 @@ red-brown hull); such a station is now unclear.
 
 Seed 7 (the development hull) evolved by 12 months (simulation results): corrosion grows 1.60x, coating damage 1.43x,
 fouling 2.5x, cracks by 4.8 cm; 8 new defects appear and one anode depletes. Comparing the two
-missions' maps, the confirmed findings flag all 5 new defects they found, with 3 false new
-labels, and 11 of the 15 grown defects they found, with no false growth; estimated growth ratios
-are within 6% of the truth (median). All 8 grown corrosion patches are flagged at 1.51x to 1.83x,
-and 3 of 4 fouling patches. Coating damage growth is missed (estimated 1.15x to 1.2x against
-1.43x): the baseline's area for coating damage is dominated by its overestimated edge. All findings
-together flag all 7 new defects found, with 38 false new labels from the possible tier. The station
-comparison flags the depleted anode and changes nothing else.
+missions' maps (with the region classifier), the confirmed findings flag 4 of the 5 new defects they
+found, with 1 false new label, and 10 of the 16 grown defects they found, with no false growth;
+estimated growth ratios are within 5% of the truth (median). Growth is flagged for 6 of 8 corrosion
+patches, 3 of 4 fouling patches and 1 of 4 coating patches, whose area is dominated by the
+overestimated flaked edge. All findings together flag 6 of the 7 new defects found, with 11 false
+new labels (38 with the rules). The station comparison flags the depleted anode and changes nothing
+else.
 
 At 24 months (fouling 6.3x, 11 new defects, two anodes depleted, one fallen off) the station
 comparison is right at all 7 stations, flagging both depletions and the lost anode. Finding changes
-are weaker once fouling patches cover square metres: the confirmed findings flag 9 of the 11 new
-defects found (8 false new labels) and 7 of 13 grown ones (4 false), with a median growth-ratio
-error of 23%.
+are weaker once fouling patches cover square metres: the confirmed findings flag 8 of the 10 new
+defects found (3 false new labels; 8 with the rules) and 11 of 13 grown ones (2 false; the rules: 7
+of 13 with 4 false), with a median growth-ratio error of 19%.
 
 ## Benchmark
 
@@ -262,23 +274,28 @@ pipeline on hulls it was not tuned on, in varied worlds:
 .venv/bin/auvinspect benchmark gate  --suite ci  --out runs/bench/ci
 ```
 
-Test suite, scored once for this milestone (simulation results; 8 hulls: 4 blue, 2 black, 2
-red-brown; visibility 4.8 to 12.5 m; 95% intervals from resampling hulls):
+Test suite (simulation results; 8 hulls: 4 blue, 2 black, 2 red-brown; visibility 4.8 to 12.5 m;
+95% intervals from resampling hulls), scored once with the rules and once with the region classifier
+(trained on the training hulls and tuned on the dev hulls in between, never on these):
 
-| Value | Test suite |
-|---|---|
-| Coverage (referee), false claims | 100% on every hull, none |
-| Stations right | 55 / 56 (98%, 95 to 100%); 9 of 9 missing anodes found; 1 depleted anode called missing; none unclear |
-| Defects found by confirmed findings | 66% (57 to 76%) |
-| Defects found by any finding | 72% (64 to 80%) |
-| Precision of confirmed findings | 49% (38 to 63%); 10 false confirmed findings per hull |
-| Defects found, by class (any finding) | corrosion 100%, coating damage 91%, cracks 54%, fouling 29% |
+| Value | Rules | Region classifier |
+|---|---|---|
+| Coverage (referee), false claims | 100% on every hull, none | same |
+| Stations right | 55 / 56 (98%, 95 to 100%); 9 of 9 missing anodes found | same |
+| Defects found by confirmed findings | 66% (57 to 76%) | 86% (79 to 92%) |
+| Defects found by any finding | 72% (64 to 80%) | 90% (84 to 95%) |
+| Precision of confirmed findings | 49% (38 to 63%) | 98% (96 to 100%) |
+| False confirmed findings per hull | 10.4 | 0.25 |
+| Corrosion, coating damage, fouling found | 100%, 91%, 29% | 100%, 97%, 97% |
+| Cracks found | 54% (7 of 13), with about 50 false crack findings per hull | 23% (3 of 13) |
 
-Coverage and the anode stations carry over to new water and paints. The defect detector does not:
-fouling is found on the two red-brown hulls (10 of 10) and on none of the six others (0 of 25), and
-the blue and black hulls carry 6 to 19 false confirmed findings each (12.5 on average) against 4 on
-each red-brown one. The cause is the detector's class rules, written for red-brown paint (see
-[Limitations](#limitations)); a detector trained on varied paints is the next step.
+Coverage and the anode stations carried over to new water and paints from the start. The rules'
+detector did not: fouling was found on the two red-brown hulls (10 of 10) and on none of the six
+others (0 of 25). The region classifier, trained on hulls of all three paints, finds fouling on
+every paint and almost no false findings. It finds fewer cracks than the rules, which reported
+every dark line: it learned from 42 crack regions only, and a crack 3 to 6 mm wide at 4 mm per
+pixel stands out less from the paint's grain than the grain does from itself (see
+[Limitations](#limitations)).
 
 ## Physics
 
@@ -386,12 +403,14 @@ An inspector reviews findings and stations by writing `runs/s7/report/review.jso
 `{"F012": {"status": "rejected", "note": "weld seam"}, "S03": {"status": "confirmed"}}`, and
 re-running the report.
 
-Anode stations of recorded runs, and the station model refitted on training-split hulls (the
-command refuses others; `report --stations-model` and `stations --model` take the result):
+Anode stations of recorded runs, and the station model and region classifier refitted on
+training-split hulls (the commands refuse others; a run configuration naming the file in
+`stations.model` or `detector.model` uses it):
 
 ```bash
 .venv/bin/auvinspect stations --run runs/s7/mission
 .venv/bin/auvinspect train-stations --run runs/s101/survey --run runs/s102/survey --out runs/anode_stations.json
+.venv/bin/auvinspect train-detector --run runs/s101/survey --run runs/s102/survey --out runs/region_classifier.json
 ```
 
 The same hull 12 months later, a second mission over it, and the changes between the two reports:
@@ -448,6 +467,7 @@ an index.
 | `report/manifest.json` | The run, its scenario directory and the scenario digest |
 | evolved `scenario.json` | As above, plus the lineage (base digest, months, rates); new items carry `new_after_months` |
 | `change/changes.json`, `metrics.json` | Finding changes (label, class, earlier and later finding, tier, area ratio) and station changes (earlier and later status, label); the change referee for confirmed findings, all findings and stations |
+| `src/auvinspect/models/region_classifier.json` | The region classifier: network weights, feature standardisation, classes, settings digest, training hulls (seed, scenario digest, paint, regions) |
 | `src/auvinspect/models/anode_stations.json` | The station model: per paint, class means and pooled covariance; settings digest; training hulls (seed, scenario digest, paint) |
 | `bench/<suite>/s<seed>/result.json` | One benchmark hull: drawn water and paint, the referees' verdicts (coverage, claims, map by tier and class, stations), versions |
 | `bench/<suite>/benchmark.json` | The suite: pooled values with intervals, per-hull rows, missing hulls, versions |
@@ -480,6 +500,9 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
   hull with the packaged model, detections at a station making no findings, the classifier voting
   over views, never guessing an unseen station, calling unclear what looks like no status or has
   no model for its paint, the packaged model's settings, training split and paints;
+- region classifier: regions labelled from the ground truth, the network learning and
+  deterministic, the packaged model trained on training hulls of every paint and refused under
+  other settings, detections taking their classes (or none) from it;
 - benchmark: each hull's water and paint drawn from its seed, the coverage criterion following the
   paint, scores pooled over hulls with intervals only for enough hulls, the gate;
 - change: evolution growing patches no faster than their rate, extending cracks by the configured
@@ -503,7 +526,8 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
    replanning when coverage holes appear.~~
 3. Perception: pretrained models (depth, segmentation, features) and a fine-tuned defect detector,
    scored against the ground truth per class and per size. *Done so far: datasets, the perception
-   referee, a classical baseline.*
+   referee, a classical baseline, a learned region classifier (numpy) trained on hulls of every
+   paint. A deep detector needs PyTorch.*
 4. ~~Defect map and report: defects placed on the hull with sizes and evidence frames; a second
    survey with grown defects for change detection; inspector review.~~ The map with multi-view
    confirmation and its referee, anode stations checked against the hull plan, the photomosaic
@@ -519,9 +543,14 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
 - Simulation only. Numbers describe this simulator and must not be read as real-world performance.
 - Defect appearance is procedural until real defect imagery (for example a public hull-inspection
   dataset) is added.
-- The baseline detector's class rules were written for red-brown paint: on black paint fouling is
-  brighter than the paint in every channel and is taken for corrosion (on the benchmark's dev hulls
-  it finds 3 of 12 fouling patches, all 3 on the one red-brown hull). The anode stations have a model per paint; the detector does not yet.
+- The detector's hand-written class rules were written for red-brown paint (on black paint they
+  take fouling for corrosion); the region classifier, trained on all three paints, replaced them.
+  Paints it has not seen are untested.
+- Cracks: a crack 3 to 6 mm wide at 4 mm per pixel shows a pixel contrast (median 3.5 to 8 median
+  deviations of a valley filter) within the paint's grain (its 99.9th percentile 8 to 16), and the
+  candidate regions' one-pixel opening removes most crack pixels. The region classifier finds 23% of
+  findable cracks on the test hulls. Filters integrating along a crack's length, or a close-up pass
+  at half the standoff over suspect areas, are the ways forward.
 - Light: single scattering for backscatter, a single-scattering halo scaled to the multiply
   scattered power for forward scatter, Lambertian surfaces, three colour bands rather than spectra,
   no shadows cast by anodes, no marine snow. Water is uniform.
