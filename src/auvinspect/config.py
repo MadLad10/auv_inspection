@@ -219,6 +219,8 @@ def _validate_mission(cfg: dict) -> None:
                    for r in rg['promotion'].values()),
            'registry: a root directory; promotion rules for region_classifier, anode_stations and segmenter, '
            'each with a benchmark suite, real_defects true or false, and numeric min and max limits')
+    _check(isinstance(cfg['fleet']['vehicles'], int) and cfg['fleet']['vehicles'] >= 1 and cfg['fleet']['min_separation_m'] > 0,
+           'fleet: vehicles an integer >= 1, min_separation_m positive')
     ob = cfg['observability']
     _check(ob['status_every_s'] > 0 and ob['turbid_visibility_m'] > 0 and ob['turbid_clear_factor'] >= 1
            and 0 <= ob['battery_warn_pct'] <= 100

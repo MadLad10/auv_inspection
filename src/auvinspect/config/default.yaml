@@ -370,6 +370,10 @@ registry:                      # versioned models with provenance, license, scor
     segmenter:         {suite: dev, real_defects: true, min: {map_recall_confirmed: 0.6, map_precision_confirmed: 0.6},
                         max: {false_confirmed_per_hull: 5.0}}
 
+fleet:                         # several vehicles on one hull (fleet.py)
+  vehicles: 2                  # each flies a contiguous group of the planned lanes
+  min_separation_m: 1.0        # the referee counts ticks with two vehicles closer than this (centre to centre)
+
 observability:                 # what an operator sees of a mission (observe.py)
   status_every_s: 10.0         # a status event this often (simulated seconds)
   turbid_visibility_m: 3.0     # visibility from the water-quality sensor below this: turbid_water ...

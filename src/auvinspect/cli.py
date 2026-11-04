@@ -157,6 +157,15 @@ def _stations(a):
     print(json.dumps(out, indent=1))
 
 
+def _fleet(a):
+    from .fleet import run
+    scn = Scenario.load(a.scenario, config_mod.load(a.config))
+    s = run(scn, a.out, vehicles=a.vehicles, save_frames=not a.no_frames, seed=a.seed)
+    print(json.dumps({k: s[k] for k in ('vehicles', 'coverage_fraction', 'claimed', 'makespan_s', 'aborted', 'separation')}
+                     | {'per_vehicle': [{k: v[k] for k in ('vehicle', 'lanes', 'sim_time_s', 'claimed_fraction')} for v in s['per_vehicle']]},
+                     indent=1))
+
+
 def _health(a):
     from .observe import health
     fired, critical = health(a.run, config_mod.load(a.config))
@@ -399,6 +408,14 @@ def main(argv=None):
     bm.add_argument('--missions', help="reuse the flown missions of another run of the same suite (same hulls)")
     bm.add_argument('--config', help='YAML run settings merged over the defaults')
     bm.set_defaults(fn=_benchmark)
+    fl = sub.add_parser('fleet', help='fly several vehicles over one hull, each a share of the lanes, on one clock')
+    fl.add_argument('--scenario', required=True)
+    fl.add_argument('--out', required=True)
+    fl.add_argument('--vehicles', type=int, help='default: fleet.vehicles')
+    fl.add_argument('--no-frames', action='store_true', help='score coverage without saving images')
+    fl.add_argument('--seed', type=int, help="mission seed (vehicle 0's; the others' are drawn from it); default: the scenario seed")
+    fl.add_argument('--config', help='YAML run settings merged over the defaults')
+    fl.set_defaults(fn=_fleet)
     hl = sub.add_parser('health', help="apply the alert rules to a run's metrics (exit 1 on a critical alert)")
     hl.add_argument('--run', required=True, help='a mission directory')
     hl.add_argument('--config', help='YAML settings merged over the defaults (observability.alerts)')

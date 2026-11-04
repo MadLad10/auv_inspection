@@ -77,6 +77,14 @@ class Onboard:
         self.standoff_stats = {'accepted': 0, 'rejected': 0}
         self.hull_end_stats = {'accepted': 0, 'rejected': 0}
         self._strips = None
+        self.area: np.ndarray | None = None       # the cells this vehicle answers for (None: the whole band)
+
+    def assign_band(self, s0: float, s1: float):
+        """Answer only for the girth band [s0, s1) of the inspection band: its holes are the vehicle's
+        to revisit (a fleet member's share)."""
+        g = self.claimed
+        rows = g.g0 + (np.arange(g.covered().shape[0]) + 0.5) * g.cell
+        self.area = np.broadcast_to(((rows >= s0) & (rows < s1))[:, None], g.covered().shape)
 
     # ------------------------------------------------------------------ navigation
     def update(self, readings: dict, t: float):
@@ -243,6 +251,8 @@ class Onboard:
     def holes(self) -> list[dict]:
         """Clusters of unclaimed cells (holes closer than onboard.hole_merge_m merge), with hull bounds."""
         unseen = ~self.claimed.covered()
+        if self.area is not None:
+            unseen &= self.area
         if not unseen.any():
             return []
         g = self.claimed

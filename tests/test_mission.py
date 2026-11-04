@@ -26,9 +26,8 @@ def _with_run(scn, **run):
 
 
 @pytest.fixture(scope='module')
-def nominal(tmp_path_factory, small_scn):
-    out = tmp_path_factory.mktemp('nominal')
-    return mission.run(small_scn, str(out), save_frames=False), out
+def nominal(small_mission):
+    return small_mission
 
 
 def test_thruster_allocation_produces_the_requested_wrench(small_cfg):

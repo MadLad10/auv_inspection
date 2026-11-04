@@ -47,12 +47,17 @@ def _r(v, nd: int = 4) -> list:
 
 
 class _Mission:
-    def __init__(self, scn: Scenario, out_dir: str, save_frames: bool, seed: int, cameras):
+    """One vehicle's mission. `run()` is a generator that advances one control tick per step, so a
+    fleet (fleet.py) can fly several vehicles on one clock; a fleet member flies `lanes` of the plan,
+    answers for the girth `band`, and shares the fleet's renderer and coverage referee."""
+
+    def __init__(self, scn: Scenario, out_dir: str, save_frames: bool, seed: int, cameras, lanes: list[int] | None = None,
+                 band: tuple[float, float] | None = None, renderer=None, fleet_referee=None):
         self.scn, self.cfg, self.hull = scn, scn.cfg, scn.hull
         self.out_dir, self.save_frames, self.seed = out_dir, save_frames, seed
         self.inspect_cam = self.cfg['survey']['camera']
         self.cams = list(dict.fromkeys([self.inspect_cam] + list(cameras or self.cfg['survey']['record_cameras'])))
-        self.legs = survey_legs(self.hull, self.cfg)
+        self.legs = survey_legs(self.hull, self.cfg, lanes)
         first = Path(self.legs[0], self.hull, self.cfg)
         self.vehicle = Vehicle(self.hull, self.cfg, first.p[0], seed)
         self.vehicle.tilt_deg = self.vehicle.tilt_cmd = float(first.tilt[0])
@@ -60,9 +65,13 @@ class _Mission:
         fix = self.cfg['navigation']['initial_fix_std']
         self.onboard = Onboard(self.hull, self.cfg, first.p[0] + rng.normal(0, fix['pos_m'], 3),
                                rng.normal(0, math.radians(fix['yaw_deg'])))
+        if band is not None:
+            self.onboard.assign_band(*band)
         self.ctrl = Controller(self.cfg, self.vehicle.model)
         self.referee = Coverage(scn)
-        self.rend = InspectionRenderer(scn)
+        self.fleet_referee = fleet_referee
+        self.own_renderer = renderer is None
+        self.rend = renderer or InspectionRenderer(scn)
         self.noise = stream(seed, 'mission_noise')
         self.dt = self.vehicle.dt
         # roll pitches the inspection view by the projection of the camera's tilt axis on the vehicle x axis
@@ -113,6 +122,7 @@ class _Mission:
             thrust = self.ctrl.command(est, p_ref, v_ref, self.dt)
             self.vehicle.step(thrust)
             self.log_tick(p_est, est, p_ref, thrust)
+            yield
             if self.vehicle.t >= self.cfg['mission']['max_seconds']:
                 self.aborted = 'time limit'
                 self.events.emit(self.vehicle.t, 'abort', 'critical', reason='time limit')
@@ -152,6 +162,8 @@ class _Mission:
                    'active_faults': v.faults.active_types(v.t), 'visible_items': visible_items(f)}
             if cam == self.inspect_cam:
                 rec['new_cells'] = self.referee.add(f)
+                if self.fleet_referee is not None:
+                    self.fleet_referee.add(f)
                 ob = self.onboard.process_frame(f.rgb, f.exposure_s, f.gain)
                 self.claims[ob['claim']] += 1
                 self.events.frame(v.t, ob['claim'])
@@ -172,7 +184,8 @@ class _Mission:
         return _r([e[0], e @ np.array([0.0, math.sin(phi), -math.cos(phi)]), e @ h.normal(s)])
 
     # ------------------------------------------------------------------ the whole mission
-    def run(self) -> dict:
+    def run(self):
+        """Generator: one step per control tick; its return value is the summary."""
         t0 = time.time()
         rounds = []
         legs, holes, k = self.legs, [], 0
@@ -184,7 +197,7 @@ class _Mission:
                 outcome = {'done': 0, 'timeout': 0, 'edge_not_found': 0}
                 for i, leg in enumerate(legs):
                     t_start = self.vehicle.t
-                    res = self.fly(leg, i, fj)
+                    res = yield from self.fly(leg, i, fj)
                     self.leg_log.append({'phase': leg.phase, 'kind': leg.kind, 'lane': leg.lane, 'outcome': res,
                                          'from_xs': _r([leg.x[0], leg.s[0]], 3), 'to_xs': _r([leg.x[-1], leg.s[-1]], 3),
                                          't': [round(t_start, 2), round(self.vehicle.t, 2)]})
@@ -192,7 +205,7 @@ class _Mission:
                                      kind=leg.kind, lane=leg.lane, outcome=res, seconds=round(self.vehicle.t - t_start, 2))
                     if res == 'aborted':
                         if self.aborted.startswith('battery'):
-                            self.surface(fj)
+                            yield from self.surface(fj)
                         break
                     outcome[res] += 1
                 rounds.append({'phase': legs[0].phase if legs else f'revisit_{k}', 'legs': len(legs), 'legs_timed_out': outcome['timeout'],
@@ -223,7 +236,7 @@ class _Mission:
         x, s = self.onboard.camera_hull_xs()
         leg = Leg('transit', 'abort', [x, x], [s, 0.0], self.cfg['vehicle']['transit_speed_mps'])
         t_start = self.vehicle.t
-        res = self.fly(leg, 0, fj)
+        res = yield from self.fly(leg, 0, fj)
         self.leg_log.append({'phase': 'abort', 'kind': 'transit', 'lane': None, 'outcome': res, 'from_xs': _r([x, s], 3),
                              'to_xs': _r([x, 0.0], 3), 't': [round(t_start, 2), round(self.vehicle.t, 2)]})
 
@@ -287,8 +300,18 @@ class _Mission:
 
     def close(self):
         self.events.close()
-        self.rend.close()
+        if self.own_renderer:
+            self.rend.close()
         self.vehicle.close()
+
+
+def drain(gen):
+    """Run a generator to its end and return its value."""
+    while True:
+        try:
+            next(gen)
+        except StopIteration as e:
+            return e.value
 
 
 def claim_check(true: np.ndarray, claimed: np.ndarray) -> np.ndarray:
@@ -308,7 +331,7 @@ def run(scn: Scenario, out_dir: str, save_frames: bool = True, seed: int | None 
         os.makedirs(os.path.join(out_dir, 'gt'), exist_ok=True)
     m = _Mission(scn, out_dir, save_frames, scn.seed if seed is None else int(seed), cameras)
     try:
-        summary = m.run()
+        summary = drain(m.run())
         m.finish(summary)
         m.write(summary)
     finally:

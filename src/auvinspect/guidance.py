@@ -134,18 +134,24 @@ class LegFollower:
         return self.path.length / self.path.leg.speed
 
 
-def survey_legs(hull: HullGeometry, cfg: dict) -> list[Leg]:
-    """The planned survey as legs: an approach, then back-and-forth lanes joined by girth transits."""
+def survey_legs(hull: HullGeometry, cfg: dict, lanes: list[int] | None = None) -> list[Leg]:
+    """The planned survey as legs: an approach, then back-and-forth lanes joined by girth transits.
+    With `lanes` (indices into the whole plan, contiguous), only those lanes, each flown in the
+    direction the whole plan flies it, so vehicles sharing the plan move in step."""
     sv, v = cfg['survey'], cfg['vehicle']
     xa, xb = -sv['end_margin_m'], hull.length + sv['end_margin_m']
     xs = lane_xs(xa, xb, capture_step(cfg))
     legs = []
-    girths = [float(g) for g in lane_girths(hull, cfg)]
-    legs.append(Leg('transit', 'survey', [xa - v['start_lead_m'], xa], [girths[0]] * 2, v['transit_speed_mps']))
-    for k, s in enumerate(girths):
+    all_girths = [float(g) for g in lane_girths(hull, cfg)]
+    ks = list(range(len(all_girths))) if lanes is None else list(lanes)
+    girths = [all_girths[k] for k in ks]
+    x_start = xa if ks[0] % 2 == 0 else xb
+    lead = -v['start_lead_m'] if ks[0] % 2 == 0 else v['start_lead_m']
+    legs.append(Leg('transit', 'survey', [x_start + lead, x_start], [girths[0]] * 2, v['transit_speed_mps']))
+    for j, (k, s) in enumerate(zip(ks, girths)):
         x0, x1 = (xa, xb) if k % 2 == 0 else (xb, xa)
-        if k:
-            legs.append(Leg('transit', 'survey', [x0, x0], [girths[k - 1], s], v['transit_speed_mps']))
+        if j:
+            legs.append(Leg('transit', 'survey', [x0, x0], [girths[j - 1], s], v['transit_speed_mps']))
         legs.append(Leg('lane', 'survey', [x0, x1], [s, s], v['speed_mps'], lane=k,
                         capture_x=[float(x) for x in (xs if k % 2 == 0 else xs[::-1])],
                         edge_search=not 0.0 <= x1 <= hull.length))

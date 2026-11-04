@@ -110,7 +110,7 @@ sensor 0.3 s after it freezes, keeping the girth error under 2 cm (22 cm without
 the vehicle drifted on its buoyancy), and the filter rejects all compass readings while the
 compass is disturbed.
 
-### Perception (milestone 3, in progress)
+### Perception (milestone 3)
 
 - **Datasets** ([`dataset.py`](src/auvinspect/dataset.py)). Recorded frames become a labelled
   dataset: images, per-pixel class masks, YOLO box labels and an annotations file listing every
@@ -395,6 +395,40 @@ comparison is right at all 7 stations, flagging both depletions and the lost ano
 are weaker once fouling patches cover square metres: the confirmed findings flag 8 of the 10 new
 defects found (3 false new labels; 8 with the rules) and 11 of 13 grown ones (2 false; the rules: 7
 of 13 with 4 false), with a median growth-ratio error of 19%.
+
+### Fleet (milestone 6, in progress)
+
+`auvinspect fleet` ([`fleet.py`](src/auvinspect/fleet.py)) flies several vehicles over one hull on
+one clock:
+- **Sharing.** The planned lanes are split into contiguous groups, one per vehicle. Each vehicle
+  flies every lane in the direction the whole plan flies it, so the vehicles move in step. Every
+  lane still ends past the hull ends, where the vehicle fixes its along-ship position. A vehicle
+  answers for the girth band up to the midpoints to its neighbours' lanes, and its revisits
+  target holes there only.
+- **One clock.** The mission advances one control tick per step, so all vehicles fly at once
+  under the same physics, navigation and faults as a single mission. A fleet of one is the
+  single-vehicle mission, byte for byte. Each vehicle writes its own frames, events and metrics
+  (`v<k>/`).
+- **Fleet referee.** One referee takes every vehicle's frames. It reports the fleet's coverage, the
+  union of the vehicles' claims against the truth, the makespan, and the closest approach between
+  two vehicles, with the ticks under `fleet.min_separation_m` (1 m).
+
+On the default 20 m hull (seed 7, simulation results):
+
+| Vehicles | Makespan | Speed-up | Coverage | Claimed, false claims | Closest approach |
+|---|---|---|---|---|---|
+| 1 | 352.8 s | 1 | 100% | 100%, 0 | n/a |
+| 2 (2 lanes each) | 175.9 s | 2.0 | 100% | 100%, 0 | 2.79 m |
+| 4 (1 lane each) | 87.3 s | 4.0 | 100% | 100%, 0 | 1.31 m, never under 1 m |
+
+With one lane each, neighbours fly opposite ways and pass a lane's spacing apart. With two lanes
+each, they move the same way, two lanes apart. There is no communication between the vehicles
+yet: each flies the share it was given before the dive, and a vehicle that aborts leaves its share
+undone. The acoustic link and a coordinator that reassigns work come next.
+
+```bash
+.venv/bin/auvinspect fleet --scenario runs/s7 --vehicles 2 --out runs/s7/fleet2
+```
 
 ## Benchmark
 
@@ -864,7 +898,10 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
   nominal stream free of ground truth and warnings, the heartbeat's spacing, the metrics against
   the summary, the alert rules on each run;
 - observability: the metrics format round-tripped (labels escaped, NaN), alert rules matching
-  labels, stage spans kept when a stage fails, `watch` stopping at the mission's end.
+  labels, stage spans kept when a stage fails, `watch` stopping at the mission's end;
+- fleet: lanes shared in contiguous groups with bands between them; a fleet of one identical to
+  the single-vehicle mission (frames and events); two vehicles covering the small hull in under
+  60% of the time, each on its own lanes, never closer than the limit, the fleet's metrics.
 
 ## Roadmap
 
@@ -889,7 +926,9 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
    container image built and run in CI, fault injection in missions, a model registry (versions,
    license from the training sources, scores made with the model, promotion rules, digests checked
    on use), and observability (the vehicle's event stream, metrics, stage traces, alert rules).
-6. Fleet: several vehicles sharing a structure under acoustic communication limits.
+6. Fleet: several vehicles sharing a structure under acoustic communication limits. *Done so far:
+   a fleet on one clock with the lanes shared out, scored by a fleet referee (coverage, claims,
+   makespan, separation). Next: the acoustic link and a coordinator that reassigns work.*
 
 ## Limitations
 
