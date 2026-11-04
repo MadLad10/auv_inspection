@@ -11,8 +11,7 @@ exactly, so every claim the software makes can be checked.
 
 *A full survey of a 20 m hull section at 20× speed. Top left: the vehicle on its lanes, with its
 camera footprint. Top right: each camera frame and the vehicle's own verdict on it. Bottom: the
-hull lighting up as the referee counts it covered, with the true defects boxed.
-[Full video, 5× speed (MP4)](docs/media/survey.mp4)*
+hull lighting up as the referee counts it covered, with the true defects boxed.*
 
 ## Why simulation
 
@@ -58,8 +57,6 @@ holes and ends at 100%, with no false claims and no contact with the hull.
 
 ![The fault mission at 30x speed](docs/media/faults.gif)
 
-[Full video, 6× speed (MP4)](docs/media/faults.mp4)
-
 ![One camera pose in 10 m, 4 m and 2 m visibility and during a camera blackout](docs/images/fault_frames.jpg)
 
 *One camera pose in clear water, in murky water and with a dead camera. The share of hull pixels
@@ -73,8 +70,6 @@ its own lanes, the topside hands it vehicle 1's unflown lane. The hull ends 100%
 without coordination), and the vehicles never come closer than 2.79 m.
 
 ![Two vehicles at 12x speed: chase views of each, coverage by vehicle and the event log](docs/media/fleet.gif)
-
-[Full video, 6× speed (MP4)](docs/media/fleet.mp4)
 
 ### Varied water and paint
 

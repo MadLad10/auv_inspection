@@ -32,7 +32,7 @@ each, they move the same way, two lanes apart.
 
 ![Two vehicles at 12x speed: vehicle 1 aborts on a battery failure and vehicle 0 is handed its lane](media/fleet.gif)
 
-*Vehicle 1's battery fails at 100 s; the topside hands its unflown lane to vehicle 0, which flies it once its own lanes are done. [Full video, 6× speed (MP4)](media/fleet.mp4)*
+*Vehicle 1's battery fails at 100 s; the topside hands its unflown lane to vehicle 0, which flies it once its own lanes are done.*
 
 ## Coordination over an acoustic link
 

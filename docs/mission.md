@@ -4,7 +4,7 @@ The `mission` command flies the planned survey with a simulated vehicle: physics
 
 ![A full survey at 20x speed](media/survey.gif)
 
-*A full survey at 20× speed. [Full video, 5× speed (MP4)](media/survey.mp4)*
+*A full survey at 20× speed.*
 
 - **Dynamics** ([`dynamics.py`](../src/auvinspect/dynamics.py)). The vehicle, a 0.5 x 0.3 x 0.2 m box
   with six thrusters, follows Fossen's marine-craft equations in the scenario's own world. The hull
@@ -50,7 +50,7 @@ the last lane; DVL dropout from 60 to 120 s; simulation results):
 
 ![The fault mission at 30x speed: camera blackout, DVL loss and murky water, then revisits](media/faults.gif)
 
-*Seed 7 with a 25 s camera blackout, a 60 s DVL dropout and 20 s of 2 m visibility: 85.5% claimed after the survey (94.7% truly covered), 100% after the revisits, no false claims. [Full video, 6× speed (MP4)](media/faults.mp4)*
+*Seed 7 with a 25 s camera blackout, a 60 s DVL dropout and 20 s of 2 m visibility: 85.5% claimed after the survey (94.7% truly covered), 100% after the revisits, no false claims.*
 
 | Run | After survey: true / claimed | After revisits: true / claimed | False claims | Largest along-ship error | Items inspected |
 |---|---|---|---|---|---|
