@@ -76,15 +76,43 @@ class Onboard:
         self._last_depth_t = -math.inf
         self.standoff_stats = {'accepted': 0, 'rejected': 0}
         self.hull_end_stats = {'accepted': 0, 'rejected': 0}
+        self.ship_fix_stats = {'accepted': 0, 'rejected': 0}
         self._strips = None
         self.area: np.ndarray | None = None       # the cells this vehicle answers for (None: the whole band)
+        self.lane_limits: tuple[float, float] | None = None   # a fleet member's revisits stay within its stretch
 
-    def assign_band(self, s0: float, s1: float):
-        """Answer only for the girth band [s0, s1) of the inspection band: its holes are the vehicle's
-        to revisit (a fleet member's share)."""
+    def _cells(self, s=None, x=None) -> np.ndarray:
+        """The cells within girth [s0, s1) and along-ship [x0, x1) (None or a None end: open)."""
         g = self.claimed
-        rows = g.g0 + (np.arange(g.covered().shape[0]) + 0.5) * g.cell
-        self.area = np.broadcast_to(((rows >= s0) & (rows < s1))[:, None], g.covered().shape)
+        shape = g.covered().shape
+        rows = g.g0 + (np.arange(shape[0]) + 0.5) * g.cell
+        cols = (np.arange(shape[1]) + 0.5) * g.cell
+        lo, hi = (s or (None, None))
+        a = (rows >= (-np.inf if lo is None else lo)) & (rows < (np.inf if hi is None else hi))
+        lo, hi = (x or (None, None))
+        b = (cols >= (-np.inf if lo is None else lo)) & (cols < (np.inf if hi is None else hi))
+        return a[:, None] & b[None, :]
+
+    def assign_area(self, s=None, x=None):
+        """Answer only for these cells of the inspection band (a fleet member's share: a girth band, a
+        stretch of the hull): its holes are the vehicle's to revisit."""
+        self.area = self._cells(s, x)
+
+    def extend_area(self, s=None, x=None):
+        """Answer also for these cells, as when another vehicle's lanes are handed over."""
+        extra = self._cells(s, x)
+        self.area = extra if self.area is None else (self.area | extra)
+
+    def ship_fix(self, fix: dict, est_then: tuple[float, float]) -> int:
+        """A horizontal position fix from the ship's acoustic positioning, measured at fix['t'] when the
+        estimate was est_then: applied now as the innovation it had then (the vehicle's own motion since
+        is carried by the estimate). Returns the number of axes accepted."""
+        f, gate = self.nav.filter, self.cfg['acoustic']['usbl']['gate']
+        ok = sum(bool(f.update_scalar('ship_fix', meas - est, h, fix['std'] ** 2, gate))
+                 for meas, est, h in ((fix['x'], est_then[0], (1.0, 0.0, 0.0)), (fix['y'], est_then[1], (0.0, 1.0, 0.0))))
+        self.ship_fix_stats['accepted'] += ok
+        self.ship_fix_stats['rejected'] += 2 - ok
+        return ok
 
     # ------------------------------------------------------------------ navigation
     def update(self, readings: dict, t: float):
@@ -292,8 +320,9 @@ class Onboard:
             except ConfigError as e:
                 h['skipped'] = str(e)
                 continue
-            xa = max(h['x'][0] - o['revisit_margin_m'], -sv['end_margin_m'])
-            xb = min(h['x'][1] + o['revisit_margin_m'], hull.length + sv['end_margin_m'])
+            lo, hi = self.lane_limits or (-sv['end_margin_m'], hull.length + sv['end_margin_m'])
+            xa = max(h['x'][0] - o['revisit_margin_m'], lo)
+            xb = min(h['x'][1] + o['revisit_margin_m'], hi)
             for g in girths:
                 x0, x1 = (xa, xb) if abs(cx - xa) <= abs(cx - xb) else (xb, xa)
                 legs.append(Leg('transit', phase, [cx, x0], [cs, g], v['transit_speed_mps']))

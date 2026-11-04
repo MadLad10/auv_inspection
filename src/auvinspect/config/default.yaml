@@ -349,6 +349,15 @@ benchmark:                     # suites of hulls, each flown as a full mission a
         min: {coverage: 0.99, map_recall_confirmed: 0.75, map_recall_all: 0.85, map_precision_confirmed: 0.8,
               recall_all_biofouling: 0.8, station_accuracy: 0.83}
         max: {false_claim: 0.005, false_confirmed_per_hull: 3.0}
+    ci_fleet:                  # the ci hulls flown by two vehicles; vehicle 1's battery fails mid-mission
+      seeds: [401, 402]
+      fleet: true
+      overrides: {hull: {length_m: 8.0},
+                  fleet: {vehicles: 2, vehicle_faults: {1: [{type: battery_drop, t_start: 50.0, params: {drop_pct: 95.0}}]}}}
+      gate:                    # vehicle 0 must take over vehicle 1's lanes on both hulls, with the fleet kept apart
+        min: {coverage: 0.99, map_recall_confirmed: 0.75, map_recall_all: 0.85, map_precision_confirmed: 0.8,
+              station_accuracy: 0.83, fleet_min_separation_m: 1.0, fleet_handovers: 2}
+        max: {false_claim: 0.005, false_confirmed_per_hull: 3.0, fleet_lanes_not_flown: 0}
     dev:  {seeds: [201, 202, 203, 204]}                             # for tuning
     test: {seeds: [301, 302, 303, 304, 305, 306, 307, 308]}
   world:                       # each hull's water and paint, drawn from its seed
@@ -371,8 +380,37 @@ registry:                      # versioned models with provenance, license, scor
                         max: {false_confirmed_per_hull: 5.0}}
 
 fleet:                         # several vehicles on one hull (fleet.py)
-  vehicles: 2                  # each flies a contiguous group of the planned lanes
+  vehicles: 2
+  allocation: lanes            # lanes: each flies a contiguous group of the lanes, end to end;
+                               # sections: each flies every lane over its stretch of the hull
+  section_overlap_m: 0.5       # neighbouring stretches overlap this much at each end
   min_separation_m: 1.0        # the referee counts ticks with two vehicles closer than this (centre to centre)
+  coordination: true           # the acoustic link and the topside coordinator (false: each flies its share alone)
+  hold_max_s: 900.0            # a vehicle done with its work holds its position at most this long for more
+  silent_after_s: 30.0         # the topside flags a vehicle unheard this long (it keeps its share) ...
+  silent_margin_s: 120.0       # ... and waits for it until this long after its planned finish
+  clearance_m: 2.0             # an aborting vehicle climbs this much farther off the hull than the standoff, where the others fly ...
+  seabed_margin_m: 1.0         # ... but stays this far above the seabed (its DVL altitude)
+  vehicle_faults: {}           # faults of single vehicles, {index: [fault, ...]}, added to those all share
+
+acoustic:                      # the link between the vehicles and the topside station (acoustics.py)
+  topside: {along: 0.5, girth_m: 1.0, standoff_m: 6.0}   # transducer over the ship's side: share of the length, depth, off the hull
+                               # (clear of the survey lanes and of an aborting vehicle's climb)
+  slot_s: 2.0                  # time division: each node holds the channel this long, in turn ...
+  guard_s: 0.5                 # ... the last of it silent, for the echoes to die down
+  bitrate_bps: 256             # payload bit rate (robust low-rate modems manage a few hundred)
+  sound_speed_mps: 1500.0
+  loss_base: 0.1               # chance a packet is lost at any range (multipath off the hull, noise) ...
+  loss_per_100m: 0.2           # ... plus this much per 100 m of range ...
+  max_range_m: 500.0           # ... and always beyond this
+  ack_timeout_cycles: 1.5      # a reliable message unacknowledged for this many turns of the channel is sent again ...
+  max_retries: 10              # ... at most this many times in all
+  message_bytes: {status: 10, lane_done: 3, finished: 2, abort: 3, assign: 16, release: 2, fix: 8, ack: 2, per_item: 1}
+  usbl:                        # the ship's acoustic positioning: where a vehicle was when it transmitted, sent back to it
+    enabled: false
+    std_base_m: 0.05           # horizontal error, 1 sigma per axis: this ...
+    std_frac: 0.01             # ... plus this share of the range from the topside's transducer
+    gate: 6.63                 # chi-square gate of each axis' update (1 dof, 99%)
 
 observability:                 # what an operator sees of a mission (observe.py)
   status_every_s: 10.0         # a status event this often (simulated seconds)

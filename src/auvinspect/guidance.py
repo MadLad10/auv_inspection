@@ -39,6 +39,8 @@ class Leg:
     lane: int | None = None
     capture_x: list[float] = field(default_factory=list)
     edge_search: bool = False         # the lane ends past a hull end: keep going until the echo stops
+    standoff: list[float] | None = None   # distance off the hull at each control point (None: survey.standoff_m)
+    share: int | None = None          # in a fleet: whose share of the plan the lane belongs to
 
 
 class Path:
@@ -48,21 +50,30 @@ class Path:
         self.leg = leg
         step = cfg['vehicle']['path_step_m']
         xs, ss = list(leg.x), list(leg.s)
+        ds = None if leg.standoff is None else list(leg.standoff)
         if leg.edge_search:                                   # extension beyond the planned end, along the lane
             xs.append(xs[-1] + math.copysign(cfg['vehicle']['edge_search_m'], xs[-1] - xs[-2]))
             ss.append(ss[-1])
-        X, S = [xs[0]], [ss[0]]
+            if ds is not None:
+                ds.append(ds[-1])
+        X, S, D = [xs[0]], [ss[0]], [ds[0]] if ds is not None else []
         planned_end = 0
         for k, (x0, s0, x1, s1) in enumerate(zip(xs, ss, xs[1:], ss[1:])):
-            n = max(1, math.ceil(math.hypot(x1 - x0, s1 - s0) / step))
+            if ds is None:
+                n = max(1, math.ceil(math.hypot(x1 - x0, s1 - s0) / step))
+            else:
+                n = max(1, math.ceil(math.hypot(x1 - x0, s1 - s0, ds[k + 1] - ds[k]) / step))
             u = np.linspace(0, 1, n + 1)[1:]
             X.extend(x0 + u * (x1 - x0))
             S.extend(s0 + u * (s1 - s0))
+            if ds is not None:
+                D.extend(ds[k] + u * (ds[k + 1] - ds[k]))
             if k == len(leg.x) - 2:
                 planned_end = len(X) - 1
         X, S = np.asarray(X), np.asarray(S)
         cam = cfg['cameras']['rig'][cfg['survey']['camera']]
-        self.p = hull.point(X, S) + cfg['survey']['standoff_m'] * hull.normal(S) - np.asarray(cam['offset'], float)
+        off = cfg['survey']['standoff_m'] if ds is None else np.asarray(D)[:, None]
+        self.p = hull.point(X, S) + off * hull.normal(S) - np.asarray(cam['offset'], float)
         self.tilt = np.degrees(hull.turn_angle(S))
         self.arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(self.p, axis=0), axis=1))])
         self.length = float(self.arc[-1])
@@ -134,12 +145,22 @@ class LegFollower:
         return self.path.length / self.path.leg.speed
 
 
-def survey_legs(hull: HullGeometry, cfg: dict, lanes: list[int] | None = None) -> list[Leg]:
+def lane_ends(hull: HullGeometry, cfg: dict, x_range: tuple[float, float] | None = None) -> tuple[float, float]:
+    """Where lanes start and end: past the hull ends by survey.end_margin_m, or a stretch of the hull."""
+    em = cfg['survey']['end_margin_m']
+    if x_range is None:
+        return -em, hull.length + em
+    return (-em if x_range[0] <= 0 else x_range[0]), (hull.length + em if x_range[1] >= hull.length else x_range[1])
+
+
+def survey_legs(hull: HullGeometry, cfg: dict, lanes: list[int] | None = None, x_range: tuple[float, float] | None = None,
+                share: int | None = None) -> list[Leg]:
     """The planned survey as legs: an approach, then back-and-forth lanes joined by girth transits.
     With `lanes` (indices into the whole plan, contiguous), only those lanes, each flown in the
-    direction the whole plan flies it, so vehicles sharing the plan move in step."""
+    direction the whole plan flies it, so vehicles sharing the plan move in step; with `x_range`,
+    over that stretch of the hull only (a lane searches for the hull end only where it reaches one)."""
     sv, v = cfg['survey'], cfg['vehicle']
-    xa, xb = -sv['end_margin_m'], hull.length + sv['end_margin_m']
+    xa, xb = lane_ends(hull, cfg, x_range)
     xs = lane_xs(xa, xb, capture_step(cfg))
     legs = []
     all_girths = [float(g) for g in lane_girths(hull, cfg)]
@@ -154,7 +175,29 @@ def survey_legs(hull: HullGeometry, cfg: dict, lanes: list[int] | None = None) -
             legs.append(Leg('transit', 'survey', [x0, x0], [girths[j - 1], s], v['transit_speed_mps']))
         legs.append(Leg('lane', 'survey', [x0, x1], [s, s], v['speed_mps'], lane=k,
                         capture_x=[float(x) for x in (xs if k % 2 == 0 else xs[::-1])],
-                        edge_search=not 0.0 <= x1 <= hull.length))
+                        edge_search=not 0.0 <= x1 <= hull.length, share=share))
+    return legs
+
+
+def takeover_legs(hull: HullGeometry, cfg: dict, lanes: list[int], x: float, s: float, phase: str = 'takeover',
+                  x_range: tuple[float, float] | None = None, share: int | None = None) -> list[Leg]:
+    """Lanes of the plan (over `x_range`, or the whole hull) handed over to a vehicle at hull position
+    (x, s): nearest in girth first, each entered from its nearer end, joined by transits at the standoff."""
+    v = cfg['vehicle']
+    xa, xb = lane_ends(hull, cfg, x_range)
+    girths = lane_girths(hull, cfg)
+    todo = sorted(lanes, key=lambda k: abs(girths[k] - s))
+    lo, hi = min(todo), max(todo)
+    order = list(range(lo, hi + 1)) if abs(girths[lo] - s) <= abs(girths[hi] - s) else list(range(hi, lo - 1, -1))
+    legs = []
+    for k in (k for k in order if k in lanes):
+        g = float(girths[k])
+        x0, x1 = (xa, xb) if abs(x - xa) <= abs(x - xb) else (xb, xa)
+        legs.append(Leg('transit', phase, [x, x0], [s, g], v['transit_speed_mps']))
+        legs.append(Leg('lane', phase, [x0, x1], [g, g], v['speed_mps'], lane=int(k),
+                        capture_x=[float(c) for c in lane_xs(x0, x1, capture_step(cfg))], edge_search=not 0.0 <= x1 <= hull.length,
+                        share=share))
+        x, s = x1, g
     return legs
 
 

@@ -72,6 +72,19 @@ def test_scores_pool_over_hulls_and_the_gate_reads_them(tmp_path):
     assert benchmark.gate({**summary, 'missing': []}, cfg) == [f"station_accuracy = {v['station_accuracy']['value']} below 0.99"]
 
 
+def test_fleet_values_join_the_score_only_when_every_hull_was_flown_by_a_fleet():
+    cfg = config.load()
+    rs = [_result(1, 8, 10, 1, 7), _result(2, 5, 10, 3, 6)]
+    assert 'fleet_min_separation_m' not in benchmark.score(rs, cfg, 'unit')
+    for r, sep in zip(rs, (2.8, 1.4)):
+        r['fleet'] = {'separation_min_m': sep, 'lanes_not_flown': 0, 'lanes_flown_twice': 1, 'handovers': 1, 'makespan_s': 100.0}
+    v = benchmark.score(rs, cfg, 'unit')
+    assert v['fleet_min_separation_m']['value'] == 1.4 and v['fleet_handovers']['value'] == 2 and v['fleet_lanes_flown_twice']['value'] == 2
+    cfg['benchmark']['suites']['ci_fleet']['gate'] = {'min': {'fleet_min_separation_m': 1.5}, 'max': {'fleet_lanes_flown_twice': 0}}
+    summary = {'suite': 'ci_fleet', 'missing': [], 'per_hull': [], 'values': v}
+    assert benchmark.gate(summary, cfg) == ['fleet_min_separation_m = 1.4 below 1.5', 'fleet_lanes_flown_twice = 2.0 above 0']
+
+
 def test_reused_missions_must_be_this_suites_hulls(tmp_path):
     cfg = config.load()
     other = tmp_path / 'other'

@@ -5,7 +5,7 @@ exact ground truth: every defect's position, outline and area is known, and ever
 knows which defect it shows. The pipeline can therefore be scored by an independent referee, not
 by its own claims.
 
-**Status:** milestones 1 to 5 of 6 done, on a physically based environment: Fossen
+**Status:** all six milestones done, on a physically based environment: Fossen
 6-DOF vehicle dynamics with added mass and contact, Jaffe-McGlamery underwater image formation with
 a photon-counting camera, and a contrast-to-noise coverage criterion. Milestone 3 (perception) has
 its dataset exporter, perception referee, a classical baseline and a learned region classifier
@@ -17,6 +17,12 @@ defect map, anode stations checked against the hull plan, the inspection report 
 statuses, the hull months later (grown and new defects, aged anodes) and change detection between
 two surveys. Milestone 5 has the benchmark and CI that gates on it, a container image, a model
 registry, and observability (the vehicle's event stream, metrics, stage traces, alert rules).
+Milestone 6 flies a fleet on one clock:
+- the vehicles share the hull by lanes or stretches, coordinated over a lossy acoustic link with a
+  topside that hands an aborted vehicle's work to another;
+- the ship's acoustic positioning serves vehicles that never reach a hull end;
+- rules keep the vehicles apart, and the referee measures it;
+- one report covers the whole fleet, and CI gates a fleet that loses a vehicle.
 
 ## What it does now
 
@@ -396,7 +402,7 @@ are weaker once fouling patches cover square metres: the confirmed findings flag
 defects found (3 false new labels; 8 with the rules) and 11 of 13 grown ones (2 false; the rules: 7
 of 13 with 4 false), with a median growth-ratio error of 19%.
 
-### Fleet (milestone 6, in progress)
+### Fleet (milestone 6)
 
 `auvinspect fleet` ([`fleet.py`](src/auvinspect/fleet.py)) flies several vehicles over one hull on
 one clock:
@@ -422,12 +428,108 @@ On the default 20 m hull (seed 7, simulation results):
 | 4 (1 lane each) | 87.3 s | 4.0 | 100% | 100%, 0 | 1.31 m, never under 1 m |
 
 With one lane each, neighbours fly opposite ways and pass a lane's spacing apart. With two lanes
-each, they move the same way, two lanes apart. There is no communication between the vehicles
-yet: each flies the share it was given before the dive, and a vehicle that aborts leaves its share
-undone. The acoustic link and a coordinator that reassigns work come next.
+each, they move the same way, two lanes apart.
+
+**Coordination over an acoustic link** ([`acoustics.py`](src/auvinspect/acoustics.py)). The
+vehicles and a topside station on the ship's side share one acoustic channel:
+- **The channel.** Nodes transmit in turn in 2 s slots, at 256 bit/s, so a vehicle sends about 48
+  bytes every 6 s in a fleet of two. Packets arrive after their time on the air plus the sound's
+  travel, and each receiver loses one with a chance that grows with range (10% plus 20% per
+  100 m).
+- **Reliable messages.** Lane done, finished, abort, assign and release are acknowledged and
+  resent until they are, up to 10 times. Status reports and the topside's heartbeat are not.
+- **What the vehicles say.** A vehicle reports each lane it finishes, that it has finished (then
+  holds its position), or that it is aborting, with the lanes it has done.
+- **The topside's job.** It hands an aborted vehicle's unfinished lanes, with their girth band, to
+  a vehicle done with its own, and releases the vehicles when no one is still working.
+
+The rules keep the vehicles apart without anyone knowing where the others are:
+- **Only an abort frees lanes.** Silence never does: the topside cannot know where a silent vehicle
+  is. It flags the vehicle and waits until 120 s past its planned finish, and the vehicle's data
+  is read when it is recovered. A holding vehicle that has not heard the topside's heartbeat for
+  30 s takes its link as lost and ends its mission where it is.
+- **Own work first, on a clear path.** A vehicle takes over lanes only once its own are done, and
+  only when no vehicle whose share lies between it and the work is still working, so its transit
+  crosses no one.
+- **Wait where no one works.** With whole-lane shares, a vehicle waits where it is, in its own
+  girth band. With stretches (below), it waits in the middle of its stretch, at the standoff. Its
+  last lane ended at a stretch boundary, where a neighbour may still be revisiting; waiting there
+  brought two vehicles within 0.05 m. Revisits stay within each vehicle's own stretch.
+- **Climb clear.** An aborting vehicle moves 2 m farther off the hull before it climbs to the
+  surface. The others fly at the standoff, and the climb crosses their lanes; the topside's
+  transducer hangs farther out still. Climbing at the standoff had brought two vehicles 1.08 m
+  apart on the small hull. Off the hull's bottom, moving out means moving towards the seabed, so
+  the vehicle moves no farther than its DVL altitude less 1 m allows: moving out there in full had
+  put a vehicle on the seabed.
+
+On the default 20 m hull with two vehicles (seed 7, simulation results):
+
+| Case | Coverage | Lanes not flown, flown twice | Makespan | Closest approach |
+|---|---|---|---|---|
+| Nominal, coordinated | 100% | none, none | 175.9 s (released at 180.7 s) | 2.79 m |
+| Vehicle 1's battery fails at 100 s, no coordination | 89.5% | lane 3, none | 175.1 s | 2.08 m |
+| The same, coordinated | 100% | none, none | 274.5 s: vehicle 0 is handed lane 3 when its own are done (176.6 s) | 2.79 m |
+| Vehicle 1's modem dies at 30 s | 100% | none, none | 175.9 s; vehicle 0 released at 311.5 s | 2.79 m |
+
+The coordinated nominal fleet flies exactly as the uncoordinated one, and its link carries about
+30 packets (about 320 bytes) per node. A fleet of one has no link: it is the single-vehicle mission.
+
+**Stretches, and positioning from the ship.** With `fleet.allocation: sections`, each vehicle
+flies every lane over its own stretch of the hull. The stretches overlap 0.5 m, and the vehicles
+move in step, a stretch apart. This allows more vehicles than lanes, but a middle stretch never
+reaches a hull end, so its vehicle gets no along-ship fix from the sounder.
+
+The ship's acoustic positioning (`acoustic.usbl`) supplies one. Whenever the topside hears a
+vehicle, it measures where the vehicle was when it transmitted: 5 cm plus 1% of the range, per
+axis. It sends that position back in its next slot. The vehicle shifts the fix by its own
+estimated motion since then and fuses it, one scalar update per axis. On the 20 m hull with four
+vehicles (simulation results):
+
+| Start fix, ship positioning | Claimed by the fleet | Middle vehicles' along-ship error, max | Makespan | Closest approach |
+|---|---|---|---|---|
+| 5 cm, none | 100% | 0.06 m | 140.5 s | 4.0 m |
+| 5 cm, on | 100% | 0.09 m | 140.7 s | 4.0 m |
+| 1 m, none | 65%: the middle vehicles claim nothing | 0.40 m, 0.90 m | 185.5 s | 1.72 m |
+| 1 m, on | 100% | 0.37 m, 0.90 m at the start; RMS 0.13 m, 0.26 m | 184.5 s | 2.24 m |
+
+What this shows:
+- **With a precise start, ship fixes are not needed.** With the 5 cm start the vehicles have by
+  default, the DVL keeps every vehicle within 7 cm, and ship fixes, coarser than that, add a
+  little noise.
+- **With a realistic start, they are.** From a 1 m start, as a GPS fix at the surface gives, the
+  middle vehicles cannot verify a single frame without them. With them, every vehicle verifies its
+  stretch.
+- **Whole lanes are faster on this hull.** Stretches finish in 140 s against 87 s, because of the
+  extra turns. They pay off with more vehicles than lanes, or on long hulls.
+
+The referee still counts the whole band covered without ship fixes: the overlaps absorb the drift.
+
+**The fleet's report.** The fleet directory holds the scenario's spec, so each `v<k>/` is a run,
+and `merged/` is the whole fleet as one run: every vehicle's frames (prefixed `v<k>_`, linked, not
+copied), the fleet referee's verdict and the union of the claims. Detection, the map, the station
+check and the report run on it unchanged. The map's multi-view confirmation now draws on every
+vehicle's frames, so a defect seen by two vehicles is confirmed by both. The report names the
+fleet. The merged run counts as aborted only when planned lanes were left unflown.
+
+**Fleet suites in the benchmark and CI.** A suite with `fleet: true` is flown by a fleet (its
+`overrides` set the fleet and per-vehicle faults), scored on the merged run, and adds the fleet's
+values: closest approach, lanes not flown or flown twice, hand-overs and makespan. The `ci_fleet`
+suite flies the two `ci` hulls with two vehicles, and vehicle 1's battery fails 50 s in. Its gate
+requires both hand-overs, every lane flown, the vehicles at least 1 m apart, and the `ci` suite's
+detection limits. CI flies and gates it after the `ci` suite.
+
+| `ci_fleet` (2 hulls, simulation) | This machine's GPU | Software renderer, as on CI |
+|---|---|---|
+| Coverage, false claims | 100%, 0 | 100%, 0 |
+| Hand-overs, lanes not flown, flown twice | 2, 0, 0 | 2, 0, 0 |
+| Closest approach | 2.79 m | 2.79 m |
+| Defects found (confirmed), precision | 86%, 100% | 83%, 92% |
+| Stations right | 6 / 6 | 6 / 6 |
 
 ```bash
-.venv/bin/auvinspect fleet --scenario runs/s7 --vehicles 2 --out runs/s7/fleet2
+.venv/bin/auvinspect fleet --scenario runs/s7 --vehicles 2 --out runs/s7/fleet2      # --config: fleet.vehicle_faults
+.venv/bin/auvinspect report --run runs/s7/fleet2/merged --out runs/s7/fleet2/report
+.venv/bin/auvinspect benchmark run --suite ci_fleet --out runs/bench/ci_fleet
 ```
 
 ## Benchmark
@@ -452,7 +554,7 @@ pipeline on hulls it was not tuned on, in varied worlds:
   falls below its minimum (above its maximum) in `benchmark.gate`.
 - **CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): on every push to `main` and every
   pull request, GitHub Actions installs the pinned versions (`constraints.txt`), runs the tests,
-  flies the `ci` suite and applies its gate; the suite's scores and reports are kept as a build
+  flies the `ci` suite and applies its gate, then the `ci_fleet` suite and its gate; the suite's scores and reports are kept as a build
   artifact. The runner has no GPU and renders with Mesa's software EGL device.
 
 ```bash
@@ -901,7 +1003,19 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
   labels, stage spans kept when a stage fails, `watch` stopping at the mission's end;
 - fleet: lanes shared in contiguous groups with bands between them; a fleet of one identical to
   the single-vehicle mission (frames and events); two vehicles covering the small hull in under
-  60% of the time, each on its own lanes, never closer than the limit, the fleet's metrics.
+  60% of the time, each on its own lanes, never closer than the limit, the fleet's metrics; an
+  aborted vehicle's lanes handed over and flown (coverage kept, no lane twice, apart throughout),
+  and left undone without coordination; a silent vehicle keeping its share and ending its mission
+  when it loses the link; the merged run (every vehicle's frames, the fleet's verdict, aborted
+  only with lanes left unflown); fleet values in the benchmark only for fleet suites, and gated;
+  three vehicles in stretches with fixes from the ship, every lane of every stretch flown once,
+  each vehicle's frames in its stretch, nothing touched after an abort;
+- acoustic link and coordinator: a message waiting for its slot, arriving after its time on the
+  air and the sound's travel, acknowledged and not resent; a slot carrying what fits; lost packets
+  resent until acknowledged, given up when no one hears, nothing heard beyond range; lanes handed
+  over only to a vehicle done with its own, with their band; a silent vehicle's lanes never
+  handed over, the others released only past its planned finish; the ship's fix of where a
+  vehicle was when it transmitted, with its error growing with range.
 
 ## Roadmap
 
@@ -926,13 +1040,24 @@ env -u PYTHONPATH MUJOCO_GL=egl .venv/bin/python -m pytest -q
    container image built and run in CI, fault injection in missions, a model registry (versions,
    license from the training sources, scores made with the model, promotion rules, digests checked
    on use), and observability (the vehicle's event stream, metrics, stage traces, alert rules).
-6. Fleet: several vehicles sharing a structure under acoustic communication limits. *Done so far:
-   a fleet on one clock with the lanes shared out, scored by a fleet referee (coverage, claims,
-   makespan, separation). Next: the acoustic link and a coordinator that reassigns work.*
+6. ~~Fleet: several vehicles sharing a structure under acoustic communication limits.~~ *Done:
+   a fleet on one clock with the lanes shared out, an acoustic link (time-division, limited bit
+   rate, range-dependent loss, acknowledgements and retries) and a topside coordinator that hands
+   an aborted vehicle's lanes to another, with rules that keep vehicles apart without knowing where
+   the others are, scored by a fleet referee (coverage, claims, makespan, hand-overs, link
+   traffic, separation); the fleet's report from one merged run; fleet suites in the benchmark,
+   with `ci_fleet` gated in CI; stretches of the hull per vehicle, with the ship's acoustic
+   positioning for the vehicles that never reach a hull end.*
 
 ## Limitations
 
 - Simulation only. Numbers describe this simulator and must not be read as real-world performance.
+- Fleet: vehicles do not appear in each other's images, and nothing physical stops two vehicles
+  meeting: the referee measures their separation, and the rules keep it. The acoustic channel is a
+  simple model: perfectly synchronised slots, a loss chance that depends on range only (no
+  multipath geometry, no sound-speed profile). The ship's positioning has Gaussian errors with no
+  outliers, and the vehicle applies a late fix as the innovation it had when it was measured.
+  Handing work over waits for a clear path, so a vehicle may wait while a neighbour finishes.
 - Defect appearance in the simulator is procedural, or cut from LIACi's real images (corrosion,
   coating damage, fouling; cracks and missing anodes stay procedural). Real patches do not make
   the rest of the image real: a segmenter trained only on simulated hulls fails on LIACi's images.

@@ -68,9 +68,11 @@ def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict |
     if os.path.exists(path) and not rescore:
         with open(path) as f:
             return json.load(f)
-    wcfg, drawn = world(seed, cfg, cfg['benchmark']['suites'][suite_name])
+    suite = cfg['benchmark']['suites'][suite_name]
+    wcfg, drawn = world(seed, cfg, suite)
     src = os.path.join(missions, f's{seed}') if missions else d
-    mdir = os.path.join(src, 'mission')
+    as_fleet = bool(suite.get('fleet'))
+    mdir = os.path.join(src, 'fleet', 'merged') if as_fleet else os.path.join(src, 'mission')
     if os.path.exists(os.path.join(mdir, 'coverage.json')):
         with open(os.path.join(src, 'scenario.json')) as f:
             digest = json.load(f)['digest']
@@ -84,8 +86,12 @@ def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict |
         with trace.span('generate'):
             scn = generate(seed, wcfg, library)
             digest = scn.save(d)
-        with trace.span('fly'):
-            fly(scn, mdir)
+        with trace.span('fly', vehicles=wcfg['fleet']['vehicles'] if as_fleet else 1):
+            if as_fleet:
+                from . import fleet
+                fleet.run(scn, os.path.join(d, 'fleet'))
+            else:
+                fly(scn, mdir)
     with trace.span('detect', detector='segmenter' if seg is not None else 'classical'):
         if seg is not None:
             from . import segmenter
@@ -116,6 +122,7 @@ def run_hull(seed: int, suite_name: str, out_root: str, cfg: dict, model: dict |
               'contact_ticks': cov['contacts']['ticks'], 'sim_time_s': cov['sim_time_s'],
               'map': {'confirmed': tier('confirmed'), 'all': tier('all')},
               'stations': {k: st[k] for k in ('stations', 'inspected', 'correct', 'unclear', 'wrong', 'per_status')},
+              **({'fleet': _fleet_result(os.path.dirname(mdir))} if as_fleet else {}),
               'versions': {'auvinspect': __version__, 'run_settings_sha256': _settings_digest(cfg),
                            'station_model_sha256': hashlib.sha256(json.dumps(model, sort_keys=True).encode()).hexdigest(),
                            'detector_model_sha256': (f'segmenter:{seg["sha256"]}' if seg is not None else
@@ -171,7 +178,10 @@ def score(results: list[dict], cfg: dict, name: str = '') -> dict:
     draws = rng.integers(0, n, (b['bootstrap'], n)) if n >= b['min_hulls_for_interval'] else np.zeros((0, n), int)
     q = (1 - b['interval']) / 2
     out = {}
-    for key, fn in metric_functions(cfg).items():
+    fns = metric_functions(cfg)
+    if results and all('fleet' in r for r in results):
+        fns.update(FLEET_METRICS)
+    for key, fn in fns.items():
         v = fn(results)
         boot = np.array([fn([results[i] for i in idx]) for idx in draws])
         boot = boot[np.isfinite(boot)]
@@ -179,6 +189,25 @@ def score(results: list[dict], cfg: dict, name: str = '') -> dict:
                     'low': round(float(np.quantile(boot, q)), 4) if boot.size else None,
                     'high': round(float(np.quantile(boot, 1 - q)), 4) if boot.size else None}
     return out
+
+
+def _fleet_result(fleet_dir: str) -> dict:
+    with open(os.path.join(fleet_dir, 'fleet.json')) as f:
+        s = json.load(f)
+    return {'vehicles': s['vehicles'], 'makespan_s': s['makespan_s'], 'end_s': s['end_s'], 'aborted_vehicles': s['aborted'],
+            'handovers': len(s.get('handovers', [])), 'lanes_not_flown': len(s['lanes']['not_flown']),
+            'lanes_flown_twice': len(s['lanes']['flown_twice']), 'separation_min_m': s['separation']['min_m'],
+            'separation_ticks_below': s['separation']['ticks_below'],
+            'link_bytes': sum(n['bytes'] for n in s['link']['nodes'].values()) if s.get('link') else 0}
+
+
+FLEET_METRICS = {
+    'fleet_min_separation_m': lambda rs: min(r['fleet']['separation_min_m'] for r in rs),
+    'fleet_lanes_not_flown': lambda rs: float(sum(r['fleet']['lanes_not_flown'] for r in rs)),
+    'fleet_lanes_flown_twice': lambda rs: float(sum(r['fleet']['lanes_flown_twice'] for r in rs)),
+    'fleet_handovers': lambda rs: float(sum(r['fleet']['handovers'] for r in rs)),
+    'fleet_makespan_s': lambda rs: float(np.mean([r['fleet']['makespan_s'] for r in rs])),
+}
 
 
 def summarize(out_root: str, suite_name: str, cfg: dict) -> dict:

@@ -240,16 +240,18 @@ def _html(out_dir, spec, cov, findings, stations, metrics, claimed_share):
         f"<td>{v['centre_error_m_median'] if v['centre_error_m_median'] is not None else ''}</td>"
         f"<td>{v['area_ratio_median'] if v['area_ratio_median'] is not None else ''}</td></tr>"
         for c, v in m['all']['per_class'].items())
+    fleet_n = cov.get('vehicles', 1)
+    who, whose = ('The vehicle', "the vehicle's") if fleet_n == 1 else (f'The fleet of {fleet_n} vehicles', "the vehicles'")
     doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Hull inspection report, scenario {spec['seed']}</title>
 <style>body{{font-family:sans-serif;margin:24px;max-width:1500px}} table{{border-collapse:collapse}} td,th{{border:1px solid #ccc;padding:4px 8px;text-align:left}}
 tr.possible{{color:#666}} img.map{{width:100%;image-rendering:pixelated}} .sim{{background:#f6f0e6;padding:12px;border:1px solid #d9c9a8}}</style></head><body>
 <h1>Hull inspection report</h1>
 <p>Scenario seed {spec['seed']}, hull section {spec['hull']['length']:.0f} m long. Simulation: the vehicle, the water and the hull are simulated.</p>
 <h2>Coverage</h2>
-<p>The vehicle verified {claimed_share * 100:.1f}% of the inspection band; hatched red on the map is not verified
+<p>{who} verified {claimed_share * 100:.1f}% of the inspection band; hatched red on the map is not verified
 ({holes.get('holes_remaining', 0)} hole(s)). Mission {('aborted: ' + e(str(cov['aborted']))) if cov.get('aborted') else 'completed'}.</p>
 <h2>Hull map</h2>
-<p>Photomosaic from the vehicle's frames (ship length across, girth down from the waterline); solid boxes are confirmed findings,
+<p>Photomosaic from {whose} frames (ship length across, girth down from the waterline); solid boxes are confirmed findings,
 dashed ones possible.</p>
 <img class="map" src="map.png">
 <h2>Findings ({sum(f['tier'] == 'confirmed' for f in findings)} confirmed, {sum(f['tier'] == 'possible' for f in findings)} possible)</h2>

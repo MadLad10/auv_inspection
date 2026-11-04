@@ -51,6 +51,12 @@ jobs:
       - name: Alert rules on the ci missions
         run: for d in runs/bench/ci/*/mission; do .venv/bin/auvinspect health --run "$d"; done
 
+      - name: Fly the ci_fleet suite (two vehicles, one loses its battery)
+        run: .venv/bin/auvinspect benchmark run --suite ci_fleet --out runs/bench/ci_fleet
+
+      - name: Gate on the ci_fleet suite's scores
+        run: .venv/bin/auvinspect benchmark gate --suite ci_fleet --out runs/bench/ci_fleet
+
       - name: Keep the scores
         if: always()
         uses: actions/upload-artifact@v4
@@ -64,6 +70,11 @@ jobs:
             runs/bench/ci/*/report/
             runs/bench/ci/*/mission/events.jsonl
             runs/bench/ci/*/mission/metrics.prom
+            runs/bench/ci_fleet/benchmark.json
+            runs/bench/ci_fleet/*/result.json
+            runs/bench/ci_fleet/*/report/
+            runs/bench/ci_fleet/*/fleet/fleet.json
+            runs/bench/ci_fleet/*/fleet/topside/events.jsonl
           if-no-files-found: ignore
 
   container:

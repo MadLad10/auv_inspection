@@ -219,8 +219,29 @@ def _validate_mission(cfg: dict) -> None:
                    for r in rg['promotion'].values()),
            'registry: a root directory; promotion rules for region_classifier, anode_stations and segmenter, '
            'each with a benchmark suite, real_defects true or false, and numeric min and max limits')
-    _check(isinstance(cfg['fleet']['vehicles'], int) and cfg['fleet']['vehicles'] >= 1 and cfg['fleet']['min_separation_m'] > 0,
-           'fleet: vehicles an integer >= 1, min_separation_m positive')
+    fl = cfg['fleet']
+    _check(fl['allocation'] in ('lanes', 'sections') and fl['section_overlap_m'] >= 0,
+           'fleet.allocation: lanes or sections; fleet.section_overlap_m non-negative')
+    u = cfg['acoustic']['usbl']
+    _check(isinstance(u['enabled'], bool) and u['std_base_m'] > 0 and u['std_frac'] >= 0 and u['gate'] > 0,
+           'acoustic.usbl: enabled true or false, std_base_m and gate positive, std_frac non-negative')
+    _check(isinstance(fl['vehicles'], int) and fl['vehicles'] >= 1 and fl['min_separation_m'] > 0 and isinstance(fl['coordination'], bool)
+           and min(fl['hold_max_s'], fl['silent_after_s']) > 0 and fl['silent_margin_s'] >= 0 and fl['clearance_m'] >= 0 and fl['seabed_margin_m'] >= 0
+           and isinstance(fl['vehicle_faults'], dict) and all(str(k).isdigit() and isinstance(v, list) for k, v in fl['vehicle_faults'].items()),
+           'fleet: vehicles an integer >= 1, min_separation_m, hold_max_s and silent_after_s positive, silent_margin_s and '
+           'clearance_m and seabed_margin_m non-negative, coordination true or false, vehicle_faults {index: [fault, ...]}')
+    for fs in fl['vehicle_faults'].values():
+        for f in fs:
+            _check(isinstance(f, dict) and f.get('type') in FAULT_TYPES and set(f) <= {'type', 't_start', 'duration', 'params'},
+                   f'fleet.vehicle_faults: unknown or malformed fault {f!r}; known: {sorted(FAULT_TYPES)}')
+    ac = cfg['acoustic']
+    _check(0 <= ac['topside']['along'] <= 1 and ac['topside']['standoff_m'] > 0 and 0 < ac['guard_s'] < ac['slot_s']
+           and min(ac['bitrate_bps'], ac['sound_speed_mps'], ac['max_range_m'], ac['ack_timeout_cycles']) > 0
+           and 0 <= ac['loss_base'] <= 1 and ac['loss_per_100m'] >= 0 and isinstance(ac['max_retries'], int) and ac['max_retries'] >= 1
+           and min(ac['message_bytes'].values()) >= 1
+           and ac['bitrate_bps'] * (ac['slot_s'] - ac['guard_s']) / 8 >= max(ac['message_bytes'].values()),
+           'acoustic: topside along in [0, 1], 0 < guard_s < slot_s, rates and ranges positive, loss_base in [0, 1], max_retries >= 1, '
+           'and a slot long enough for the largest message')
     ob = cfg['observability']
     _check(ob['status_every_s'] > 0 and ob['turbid_visibility_m'] > 0 and ob['turbid_clear_factor'] >= 1
            and 0 <= ob['battery_warn_pct'] <= 100

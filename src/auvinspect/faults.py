@@ -18,6 +18,7 @@ FAULT_TYPES = {
     'thruster_dead': 'one thruster produces no thrust (params: name)',
     'standoff_dropout': 'the standoff sounder returns no echo',
     'battery_drop': 'part of the stored energy is lost (params: drop_pct)',
+    'modem_dead': 'the acoustic modem neither sends nor hears (a fleet member)',
 }
 
 
