@@ -16,7 +16,11 @@ FROM ${BASE} AS nav-build
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git python3-pip \
  && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml /tmp/pyproject.toml
-RUN pip3 wheel --no-deps --wheel-dir /wheels "$(grep -o 'auv-navigation-fusion @ git+[^"]*' /tmp/pyproject.toml)"
+# Ubuntu's pip 22.0.2 builds with the system's setuptools 59.6, which cannot read [project] metadata
+# (the wheel comes out named "unknown" and is discarded); a pinned current pip uses the setuptools
+# the package asks for.
+RUN python3 -m pip install --no-cache-dir pip==25.2 \
+ && python3 -m pip wheel --no-cache-dir --no-deps --wheel-dir /wheels "$(grep -o 'auv-navigation-fusion @ git+[^"]*' /tmp/pyproject.toml)"
 
 FROM scratch AS nav
 COPY --from=nav-build /wheels/ /
