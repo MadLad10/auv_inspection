@@ -63,6 +63,8 @@ model trained on red-brown hulls alone, given black hulls, got 19 of 21 stations
 the other 2 wrong with confidence 1.0, at distances of 140 to 970 from every status (6 to 23 on a
 red-brown hull); such a station is now unclear.
 
+![The top of the seed-7 inspection report: coverage, the hull photomosaic with findings, and the findings table](images/report.jpg)
+
 ## Change detection
 
 - **The hull months later** ([`evolution.py`](../src/auvinspect/evolution.py)). `evolve` turns a
@@ -79,6 +81,8 @@ red-brown hull); such a station is now unclear.
   *anode replaced*, *unchanged*, or *unknown* when a survey did not inspect it. The change referee
   checks each finding's label against the item the later finding matches, and each station's
   against the change in its true status.
+
+![The same stretch of hull at the first survey, 12 months later and 24 months later](images/hull_change.jpg)
 
 Seed 7 (the development hull) evolved by 12 months (simulation results): corrosion grows 1.60x, coating damage 1.43x,
 fouling 2.5x, cracks by 4.8 cm; 8 new defects appear and one anode depletes. Comparing the two

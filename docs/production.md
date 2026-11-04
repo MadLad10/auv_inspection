@@ -27,6 +27,8 @@ pipeline on hulls it was not tuned on, in varied worlds:
   flies the `ci` suite and applies its gate, then the `ci_fleet` suite and its gate; the suite's scores and reports are kept as a build
   artifact. The runner has no GPU and renders with Mesa's software EGL device.
 
+![Camera frames from six test hulls: red-brown, blue and black paint, visibility 4.8 to 12.5 m](images/water_and_paint.jpg)
+
 ```bash
 .venv/bin/auvinspect benchmark run   --suite dev --out runs/bench/dev            # all hulls; --seed for one
 .venv/bin/auvinspect benchmark score --suite dev --out runs/bench/dev            # writes benchmark.json

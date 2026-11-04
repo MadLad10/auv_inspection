@@ -7,7 +7,12 @@ flies it, finds corrosion, coating damage, fouling, cracks and worn anodes, and 
 inspection report. Everything is built and tested in simulation, where every defect is known
 exactly, so every claim the software makes can be checked.
 
-![A mission in progress: the vehicle on its survey lane (top left), its latest camera frame (top right), and the hull covered so far with the true defects boxed (bottom)](docs/images/mission.jpg)
+![A full survey of a 20 m hull section at 20x speed](docs/media/survey.gif)
+
+*A full survey of a 20 m hull section at 20× speed. Top left: the vehicle on its lanes, with its
+camera footprint. Top right: each camera frame and the vehicle's own verdict on it. Bottom: the
+hull lighting up as the referee counts it covered, with the true defects boxed.
+[Full video, 5× speed (MP4)](docs/media/survey.mp4)*
 
 ## Why simulation
 
@@ -41,6 +46,58 @@ against what the software reports about itself.
 - **Production layer.** Benchmark suites that gate every change in CI, a container image, a model
   registry that tracks licences, and observability: an event stream, Prometheus metrics, traces
   and alert rules.
+
+## See it run
+
+### Faults and recovery
+
+The camera goes dark for 25 s, the DVL drops out for 60 s, and the water turns murky (2 m
+visibility) for 20 s. The vehicle marks the frames it cannot verify, so after the survey it claims
+85.5% of the hull while the referee counts 94.7%. It then plans and flies revisit lanes over the
+holes and ends at 100%, with no false claims and no contact with the hull.
+
+![The fault mission at 30x speed](docs/media/faults.gif)
+
+[Full video, 6× speed (MP4)](docs/media/faults.mp4)
+
+![One camera pose in 10 m, 4 m and 2 m visibility and during a camera blackout](docs/images/fault_frames.jpg)
+
+*One camera pose in clear water, in murky water and with a dead camera. The share of hull pixels
+the referee counts drops from 94% to 31% to nothing.*
+
+### Two vehicles, one battery failure
+
+Vehicle 1's battery fails 100 s in. It moves clear of the hull and climbs to the surface. The
+topside on the ship hears the abort over the acoustic link 6 s later. When vehicle 0 has finished
+its own lanes, the topside hands it vehicle 1's unflown lane. The hull ends 100% covered (89.5%
+without coordination), and the vehicles never come closer than 2.79 m.
+
+![Two vehicles at 12x speed: chase views of each, coverage by vehicle and the event log](docs/media/fleet.gif)
+
+[Full video, 6× speed (MP4)](docs/media/fleet.mp4)
+
+### Varied water and paint
+
+Each benchmark hull draws its water clarity and one of three antifouling paints from its seed.
+These frames come from the frozen test suite:
+
+![Camera frames from six test hulls: red-brown, blue and black paint, visibility 4.8 to 12.5 m](docs/images/water_and_paint.jpg)
+
+### The inspection report
+
+The report is a photomosaic of the hull built from the vehicle's frames, with the findings boxed.
+It adds a table of findings with evidence crops, the anode stations' status and the vehicle's
+health log. An inspector marks each finding confirmed or rejected, and an appendix scores
+everything against the ground truth.
+
+![The top of an inspection report: coverage, the hull photomosaic with findings, and the findings table](docs/images/report.jpg)
+
+### The same hull, months later
+
+The simulator ages a hull at configured rates. Change detection compares two surveys and labels
+each finding new, grown, unchanged or gone.
+
+![The same stretch of hull at the first survey, 12 months later and 24 months later](docs/images/hull_change.jpg)
 
 ## How it fits together
 

@@ -30,6 +30,10 @@ On the default 20 m hull (seed 7, simulation results):
 With one lane each, neighbours fly opposite ways and pass a lane's spacing apart. With two lanes
 each, they move the same way, two lanes apart.
 
+![Two vehicles at 12x speed: vehicle 1 aborts on a battery failure and vehicle 0 is handed its lane](media/fleet.gif)
+
+*Vehicle 1's battery fails at 100 s; the topside hands its unflown lane to vehicle 0, which flies it once its own lanes are done. [Full video, 6× speed (MP4)](media/fleet.mp4)*
+
 ## Coordination over an acoustic link
 
 The vehicles and a topside station on the ship's side share one acoustic channel

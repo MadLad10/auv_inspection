@@ -32,6 +32,12 @@ With the default configuration (water visibility 10 m), seed 7 has 7 anodes, 8 c
 5 coating-damage patches, 4 fouling patches and 3 cracks. The survey plans 4 lanes (96 frames),
 covers 100% of the inspection band and inspects every item.
 
+![A camera frame (left) and its exact per-pixel ground truth (right)](images/camera_vs_truth.jpg)
+
+![One camera pose in clear and murky water and during a camera blackout](images/fault_frames.jpg)
+
+*One camera pose in 10 m, 4 m and 2 m visibility and with a dead camera: the share of hull pixels the coverage referee counts drops from 94% to 31% to nothing.*
+
 ## Physics
 
 ### Water and light ([`optics.py`](../src/auvinspect/optics.py))
@@ -72,6 +78,8 @@ albedo step of 0.05 on hull paint) would reach a contrast-to-noise ratio of 5 ov
 the paint's direct, forward-scattered and backscattered light, read noise and the quantization
 step. The referee evaluates this per pixel from the render; the planner and the vehicle evaluate the
 same function on the analytic hull from the pose, water and exposure they know.
+
+![The vehicle on lane 0, 1.5 m from the hull, with its camera frustum and footprint](images/vehicle.jpg)
 
 ### Vehicle ([`dynamics.py`](../src/auvinspect/dynamics.py), [`sensors.py`](../src/auvinspect/sensors.py))
 
